@@ -25,7 +25,7 @@ Denote a fixed size vector with element type `T` and size `N`.
 struct LFixedVector{T,N} <: LVector{T}
     p::NTuple{N,T}
 end
-stored_length(::Type{LFixedVector{T,N}}, ::Any) where {T,N} = N
+get_length(::Type{LFixedVector{T,N}}, ::Any) where {T,N} = N
 Base.eltype(::Type{LFixedVector{T,N}}) where {T,N} = T
 
 """
@@ -45,7 +45,32 @@ Example:
 struct LVarVector{T,F}  <: LVector{T}
     p::NTuple{0,T}
 end
-stored_length(::Type{LVarVector{T,F}}, x) where {T,F} = F(x)
+
+function get_length(::Type{LVarVector{T,F}}, x) where {T,F}
+    F isa Symbol ? getproperty(x, F) :
+    F isa Integer ? getindex(x, F) :
+    F isa Function ? F(x) :
+    0
+end
+function set_length!(::Type{LVarVector{T,F}}, (S, p), v) where {T,F}
+    ix = 1
+    if F isa Symbol
+        # setproperty!(x, v, F)
+        i = findfirst(isequal(F), fieldnames(S))
+        i === nothing && return v
+        G = fieldtype(S, i)
+        p += fieldoffset(S, i)
+    elseif F isa Integer
+        # setindex!(x, v, F)
+        G = eltype(S)
+        ix = Int(F)
+        ix <= 0 && return v 
+    end
+    vv = G(v)
+    unsafe_store!(Ptr{G}(p), vv, ix)
+    vv
+end
+
 Base.eltype(::Type{LVarVector{T,F}}) where {T,F} = T
 
 struct LForwardReference{M,L} <: Layout
@@ -132,12 +157,12 @@ the same vector recursively.
 function create_bytes(::Type{T}, veclens=()) where T
     n = total_size(T, veclens) * 2
     buf = fill(UInt8(0x0), n)
-    m = create_bytes!(buf, T, 0, veclens)
+    m = create_bytes!(buf, T, 0, veclens, nothing)
     resize!(buf, m)
     buf
 end
 
-function create_bytes!(bytes::Vector{UInt8}, ::Type{T}, offset, veclens) where T <: Layout
+function create_bytes!(bytes::Vector{UInt8}, ::Type{T}, offset, veclens, parent) where T <: Layout
     len = simple_size(T, veclens)
     off = offset
     ptr = pointer_from_vector(bytes) + off
@@ -153,16 +178,16 @@ function create_bytes!(bytes::Vector{UInt8}, ::Type{T}, offset, veclens) where T
         if F <: Union{Ptr,LForwardReference}
             noff = align(noff)
             unsafe_store!(Ptr{Ptr{Nothing}}(p), ptr + noff)
-            len = create_bytes!(bytes, eltype(F), noff + offset, vl)
+            len = create_bytes!(bytes, eltype(F), noff + offset, vl, (T, ptr))
             noff += len
         else
-            create_bytes!(bytes, F, off, vl)
+            create_bytes!(bytes, F, off, vl, (T, ptr))
         end
     end
     noff
 end
 
-function create_bytes!(bytes::Vector{UInt8}, ::Type{T}, offset, veclens) where {N,F,T<:LFixedVector{F,N}}
+function create_bytes!(bytes::Vector{UInt8}, ::Type{T}, offset, veclens, parent) where {N,F,T<:LFixedVector{F,N}}
     len = simple_size(T, veclens)
     off = offset
     ptr = pointer_from_vector(bytes) + off
@@ -175,15 +200,15 @@ function create_bytes!(bytes::Vector{UInt8}, ::Type{T}, offset, veclens) where {
         if F <: Union{Ptr,LForwardReference}
             noff = align(noff)
             unsafe_store!(ptr + f, ptr + noff)
-            len = create_bytes!(bytes, eltype(F), noff + off, vl)
+            len = create_bytes!(bytes, eltype(F), noff + off, vl, (T, ptr))
             noff += len
         else
-            create_bytes!(bytes, F, offset + f, vl)
+            create_bytes!(bytes, F, offset + f, vl, (T, ptr))
         end
     end
     noff
 end
-function create_bytes!(bytes::Vector{UInt8}, ::Type{T}, offset, veclens) where {F,T<:LVarVector{F}}
+function create_bytes!(bytes::Vector{UInt8}, ::Type{T}, offset, veclens, parent) where {F,T<:LVarVector{F}}
     len = simple_size(T, veclens)
     off = offset
     ptr = pointer_from_vector(bytes) + off
@@ -191,6 +216,7 @@ function create_bytes!(bytes::Vector{UInt8}, ::Type{T}, offset, veclens) where {
     vlen(i) = i <= length(veclens) ? veclens[i] : ()
     j = 0
     N = vlen(j += 1)
+    set_length!(T, parent, N)
     for i = 1:N
         vl = is_template_variable(F, true) ? vlen(j += 1) : ()
         f = simple_size(F, vl) * (i - 1)
@@ -198,16 +224,16 @@ function create_bytes!(bytes::Vector{UInt8}, ::Type{T}, offset, veclens) where {
         if F <: Union{Ptr,LForwardReference}
             noff = align(noff)
             unsafe_store!(ptr + f, ptr + noff)
-            len = create_bytes!(bytes, eltype(F), noff + off, vl)
+            len = create_bytes!(bytes, eltype(F), noff + off, vl, (T, ptr))
             noff += len
         else
-            create_bytes!(bytes, F, off + f, vl)
+            create_bytes!(bytes, F, off + f, vl, (T, ptr))
         end
     end
     noff
 end
 
-function create_bytes!(::Vector{UInt8}, ::Type{T}, offset, veclens) where T
+function create_bytes!(::Vector{UInt8}, ::Type{T}, offset, veclens, parent) where T
     simple_size(T, ())
 end
 
@@ -235,6 +261,7 @@ function blength(::Type{T}, veclens, v::Val{P}) where {P,S,T<:LVarVector{S}}
     isempty(veclens) && return 0
     n = first(veclens)
     n == 0 && return 0
+    n < 0 && throw(ArgumentError("negative vector length '$n' not allowed"))
     vl(i) = i < length(veclens) ? veclens[i+1] : ()
     sum(blength(S, vl(i), v) for i = 1:n)
 end

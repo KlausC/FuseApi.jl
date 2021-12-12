@@ -88,3 +88,16 @@ end
     @test cs.vec isa CVector{Float64}
     @test length(cs.vec) == cs.len == LEN
 end
+
+struct B <: Layout
+    a::Int
+    b::LVarVector{Float64, :a}
+end
+
+@testset "variable length vector in struct" begin
+    @test_throws ArgumentError create_bytes(B, (-3))
+    cs = CStruct{B}(create_bytes(B, (0)))
+    @test length(cs.b) == cs.a == 0
+    cs = CStruct{B}(create_bytes(B, (3)))
+    @test length(cs.b) == cs.a == 3
+end
