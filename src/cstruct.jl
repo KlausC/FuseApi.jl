@@ -156,7 +156,7 @@ function get_from_pointer(fp::Ptr{FT}, parent) where FT <: Ptr
 end
 
 function get_from_pointer(fp::Ptr{FT}, parent) where {T,FT<:LVector{T}}
-    CVector{T}(fp, length(FT, parent))
+    CVector{T}(fp, stored_length(FT, parent))
 end
 
 function get_from_pointer(fp::Ptr{FT}, parent) where FT <: Layout

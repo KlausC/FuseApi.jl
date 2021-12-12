@@ -25,7 +25,7 @@ Denote a fixed size vector with element type `T` and size `N`.
 struct LFixedVector{T,N} <: LVector{T}
     p::NTuple{N,T}
 end
-Base.length(::Type{LFixedVector{T,N}}, ::Any) where {T,N} = N
+stored_length(::Type{LFixedVector{T,N}}, ::Any) where {T,N} = N
 Base.eltype(::Type{LFixedVector{T,N}}) where {T,N} = T
 
 """
@@ -45,7 +45,7 @@ Example:
 struct LVarVector{T,F}  <: LVector{T}
     p::NTuple{0,T}
 end
-Base.length(::Type{LVarVector{T,F}}, x) where {T,F} = F(x)
+stored_length(::Type{LVarVector{T,F}}, x) where {T,F} = F(x)
 Base.eltype(::Type{LVarVector{T,F}}) where {T,F} = T
 
 struct LForwardReference{M,L} <: Layout

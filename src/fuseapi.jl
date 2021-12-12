@@ -1,6 +1,6 @@
 
 export FuseLowlevelOps, register, main_loop
-export FuseFileInfo, FuseEntryParam, FuseArgs, FuseCmdlineOpts, FuseReq, FuseIno
+export FuseFileInfo, FuseEntryParam, FuseCmdlineArgs, FuseCmdlineOpts, FuseReq, FuseIno
 export Cstat, Cflock
 
 import Base.CFunction
@@ -12,7 +12,12 @@ struct FuseLoopConfig
     max_idle_threads::Cuint
 end
 
-struct FuseArgs <: Layout
+"""
+    FuseCmdlineArgs
+
+Layout template for commandline arguments as to be passed to fuse_parse_cmdline
+"""
+struct FuseCmdlineArgs <: Layout
     argc::Cint
     argv::Ptr{LVarVector{Cstring, (x) -> x.argc}}
     allocated::Cint
@@ -306,8 +311,8 @@ end
 
 function create_args(CMD::String, arg::AbstractVector{String})
     argc = length(arg)
-    data = create_bytes(FuseArgs, argc + 2)
-    args = CStructGuided{FuseArgs}(data)
+    data = create_bytes(FuseCmdlineArgs, argc + 2)
+    args = CStructGuided{FuseCmdlineArgs}(data)
     argv = args.argv
     args.argc = argc + 1
     argv[1] = CMD
@@ -325,7 +330,7 @@ function main_loop(args::AbstractVector{String}, fs::Module)
     callbacks = filter_ops(fs)
 
     se = ccall((:fuse_session_new, :libfuse3), Ptr{Nothing},
-        (Ptr{FuseArgs}, Ptr{CFu}, Cint, Ptr{Nothing}),
+        (Ptr{FuseCmdlineArgs}, Ptr{CFu}, Cint, Ptr{Nothing}),
         fargs, callbacks, length(callbacks), C_NULL)
 
     se == C_NULL && throw(ArgumentError("fuse_session_new failed"))
@@ -341,10 +346,10 @@ function main_loop(args::AbstractVector{String}, fs::Module)
 end
 
 
-function fuse_parse_cmdline(args::CStructAccess{FuseArgs})
+function fuse_parse_cmdline(args::CStructAccess{FuseCmdlineArgs})
     opts = create_bytes(FuseCmdlineOpts)
     popts = pointer_from_vector(opts)
-    ccall((:fuse_parse_cmdline, :libfuse3), Cint, (Ptr{FuseArgs}, Ptr{UInt8}), args, popts)
+    ccall((:fuse_parse_cmdline, :libfuse3), Cint, (Ptr{FuseCmdlineArgs}, Ptr{UInt8}), args, popts)
     CStructGuided{FuseCmdlineOpts}(opts)
 end
 
