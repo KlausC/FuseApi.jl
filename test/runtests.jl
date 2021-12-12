@@ -1,6 +1,7 @@
-using FuseApi
+using SQLiteFs
 using Test
 
-@testset "FuseApi.jl" begin
-    # Write your tests here.
+@testset "SQLiteFs.jl" begin
+    include("cstruct.jl")
+    include("layout.jl")
 end
