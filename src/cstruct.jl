@@ -1,5 +1,5 @@
 
-export Caccessor, CStruct, CVector, CStructAccess
+export Caccessor, CStruct, CVector, CStructAccess, CStructGuarded
 export pointer_from_vector
 
 import Base: length, size, pointer, show, unsafe_convert, Fix1
@@ -38,14 +38,14 @@ struct CStruct{T} <: CStructAccess{T}
     CStruct(p::Ptr{T}) where T = CStruct{T}(p)
 end
 
-struct CStructGuided{T,D} <: CStructAccess{T}
+struct CStructGuarded{T,D} <: CStructAccess{T}
     cs::CStruct{T}
     guide::Vector{D}
-    function CStructGuided{T}(data::Vector{D}) where {T,D<:Union{Integer,Ptr}}
+    function CStructGuarded{T}(data::Vector{D}) where {T,D<:Union{Integer,Ptr}}
         new{T,D}(CStruct{T}(data), data)
     end
 end
-CStructGuided(::Type{T}, veclens=()) where T = CStructGuided{T}(create_bytes(T, veclens))
+CStructGuarded(::Type{T}, veclens=()) where T = CStructGuarded{T}(create_bytes(T, veclens))
 
 """
     CVector
@@ -62,23 +62,22 @@ struct CVector{T} <: AbstractVector{T}
     end
 end
 
-const CAccessor = Union{CStruct, CVector}
 # accessing the fields represented by CStruct
 # to access the pointer use function `pointer`
 propertynames(::CStruct{T}) where T = fieldnames(T)
-propertynames(::CStructGuided{T}) where T = fieldnames(T)
+propertynames(::CStructGuarded{T}) where T = fieldnames(T)
 
 function getproperty(cs::CStruct{T}, field::Symbol) where T
     fp = pointer_for_field(cs, field)
     get_from_pointer(fp, cs)
 end
-getproperty(sg::CStructGuided, field::Symbol) = getproperty(getfield(sg, :cs), field)
+getproperty(sg::CStructGuarded, field::Symbol) = getproperty(getfield(sg, :cs), field)
 
 function setproperty!(cs::CStruct{T}, field::Symbol, v) where T
     fp = pointer_for_field(cs, field)
     set_at_pointer!(fp, v)
 end
-setproperty!(sg::CStructGuided, field::Symbol, v) = setproperty!(getfield(sg, :cs), field, v)
+setproperty!(sg::CStructGuarded, field::Symbol, v) = setproperty!(getfield(sg, :cs), field, v)
 
 function getindex(cv::CVector{T}, i::Integer) where T
     p = pointer_for_index(cv, i)
@@ -102,9 +101,10 @@ size(cv::CVector) = (length(cv),)
 
 get the internal fields of accessors
 """
-pointer(cs::CAccessor) = getfield(cs, :pointer)
+pointer(cs::CStruct) = getfield(cs, :pointer)
+pointer(cs::CVector) = getfield(cs, :pointer)
 length(cv::CVector) = getfield(cv, :length)
-pointer(sg::CStructGuided) = pointer(getfield(sg, :cs))
+pointer(sg::CStructGuarded) = pointer(getfield(sg, :cs))
 
 function show(io::IO, x::CStructAccess{T}) where T
     show(io, typeof(x))
@@ -205,6 +205,7 @@ end
 
 unsafe_convert(::Type{Ptr{T}}, cs::CStructAccess{T}) where T = Ptr{T}(pointer(cs))
 unsafe_convert(::Type{Ptr{Vector{T}}}, cs::CVector{T}) where T = Ptr{Vector{T}}(pointer(cs))
+
 """
     p = pointer_from_vector(a::Vector{T})::Ptr{T}
 

@@ -52,20 +52,25 @@ function get_length(::Type{LVarVector{T,F}}, x) where {T,F}
     F isa Function ? F(x) :
     0
 end
-function set_length!(::Type{LVarVector{T,F}}, (S, p), v) where {T,F}
+function set_length!(::Type{LVarVector{T,F}}, t::Tuple{U,Ptr}, v) where {T,F,U}
+    S, p = t
     ix = 1
+    G = Nothing
     if F isa Symbol
         # setproperty!(x, v, F)
+        S <: Layout || return v
         i = findfirst(isequal(F), fieldnames(S))
         i === nothing && return v
         G = fieldtype(S, i)
         p += fieldoffset(S, i)
     elseif F isa Integer
         # setindex!(x, v, F)
+        S <: LFixedVector || return v
         G = eltype(S)
         ix = Int(F)
         ix <= 0 && return v 
     end
+    G === Nothing && return v
     vv = G(v)
     unsafe_store!(Ptr{G}(p), vv, ix)
     vv

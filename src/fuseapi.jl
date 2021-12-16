@@ -1,6 +1,7 @@
 
 export FuseLowlevelOps, register, main_loop
-export FuseFileInfo, FuseEntryParam, FuseCmdlineArgs, FuseCmdlineOpts, FuseReq, FuseIno
+export FUSE_INO_ROOT
+export FuseFileInfo, FuseEntryParam, FuseCmdlineArgs, FuseCmdlineOpts, FuseReq, FuseIno, FuseMode
 export Cstat, Cflock
 
 import Base.CFunction
@@ -93,9 +94,12 @@ const Cuid_t = UInt32
 const Cgid_t = UInt32
 const Coff_t = Csize_t
 const Coff64_t = UInt64
+const Cuint64_t = UInt64
 const Cpid_t = Cint
 const Cfsblkcnt_t = UInt64
 const Cfsfilcnt_t = UInt64
+
+const FUSE_INO_ROOT = FuseIno(1)
 
 struct FuseBufFlags
     flag::Cint
@@ -265,21 +269,6 @@ const FUSE_IOCTL_MAX_IOV = 256
 
 # dummy function - should never by actually called
 noop(args...) = UV_ENOTSUP
-const REGISTERED = Function[noop for i = 1:F_SIZE]
-regops() = REGISTERED
-# utility functions
-function fcallback(which::Int, args...)
-    regops()[which](args...)
-end
-
-function register(which::Int, f::Function)
-    regops()[which] = f
-end
-function register(which::Symbol, f::Function)
-    index = findfirst(isequal(which), fieldnames(FuseLowlevelOps))
-    register(index, f)
-end
-register(f::Function) = register(nameof(f), f)
 
 function FuseLowlevelOps(all::FuseLowlevelOps, reg::Vector{Function})
     FuseLowlevelOps(filter_ops(all, reg)...)
@@ -289,13 +278,10 @@ function filter_ops(all::Vector, reg::Vector{Function})
 end
 
 function filter_ops(fs::Module)
-    all = ALL_FLO()
     res = fill(C_NULL, length(fieldnames(FuseLowlevelOps)))
-    ro = regops()
     for (i, f) in enumerate(fieldnames(FuseLowlevelOps))
         if (c = getp(fs, f, noop)) != noop
-            res[i] = all[i]
-            ro[i] = c
+            res[i] = gen_callback(f, c)
         end     
     end
     res
@@ -303,16 +289,62 @@ end
 
 function getp(m, f::Symbol, def)
     try
-        getproperty(m, f)
+        if f in names(m, all=true)
+            getproperty(m, f)
+        else
+            def
+        end
     catch
         def
     end
 end
 
+function gen_callback(f::Symbol, c::Function)
+    gf = Symbol('G', f)
+    gfunction = getproperty(FuseApi, gf)
+    gfunction(c).ptr
+end
+
+"""
+    docall(f, req)
+
+Provides common frame for all req-related C-callback functions
+If the actual callback function throws or returns a value != 0
+An error reply is returned.
+"""
+function docall(f::Function, req::FuseReq)
+    error = Base.UV_EAFNOSUPPORT
+    try
+        error = f()
+    catch
+        rethrow()
+    finally
+        if error != 0
+            fuse_reply_err(req, abs(error))
+        end
+        nothing
+    end
+    nothing
+end
+
+"""
+    docall(f)
+
+Frame for `init` and `destroy`
+"""
+function docall(f::Function)
+    try
+        f()
+    finally
+        nothing
+    end
+    nothing
+end
+
 function create_args(CMD::String, arg::AbstractVector{String})
     argc = length(arg)
     data = create_bytes(FuseCmdlineArgs, argc + 2)
-    args = CStructGuided{FuseCmdlineArgs}(data)
+    args = CStructGuarded{FuseCmdlineArgs}(data)
     argv = args.argv
     args.argc = argc + 1
     argv[1] = CMD
@@ -326,18 +358,21 @@ function main_loop(args::AbstractVector{String}, fs::Module)
 
     fargs = create_args("command", args)
     opts = fuse_parse_cmdline(fargs)
+    println("parsed mountpoint $(opts.mountpoint)")
 
     callbacks = filter_ops(fs)
 
     se = ccall((:fuse_session_new, :libfuse3), Ptr{Nothing},
         (Ptr{FuseCmdlineArgs}, Ptr{CFu}, Cint, Ptr{Nothing}),
-        fargs, callbacks, length(callbacks), C_NULL)
+        fargs, callbacks, sizeof(callbacks), C_NULL)
 
     se == C_NULL && throw(ArgumentError("fuse_session_new failed"))
 
+    println("going to mount at $(opts.mountpoint)")
     rc = ccall((:fuse_session_mount, :libfuse3), Cint, (Ptr{Nothing}, Cstring), se, opts.mountpoint)
     rc != 0 && throw(ArgumentError("fuse_session_mount failed"))
 
+    println("mounted at $(opts.mountpoint) - starting loop")
     rc = ccall((:fuse_session_loop, :libfuse3), Cint, (Ptr{Nothing},), se)
     rc != 0 && throw(ArgumentError("fuse_session_loop failed"))
 
@@ -350,7 +385,7 @@ function fuse_parse_cmdline(args::CStructAccess{FuseCmdlineArgs})
     opts = create_bytes(FuseCmdlineOpts)
     popts = pointer_from_vector(opts)
     ccall((:fuse_parse_cmdline, :libfuse3), Cint, (Ptr{FuseCmdlineArgs}, Ptr{UInt8}), args, popts)
-    CStructGuided{FuseCmdlineOpts}(opts)
+    CStructGuarded{FuseCmdlineOpts}(opts)
 end
 
 function log(args...)
@@ -360,3 +395,6 @@ end
 
 
 # Base.unsafe_convert(::Type{Ptr{FuseReq}}, cs::FuseReq) where T = Ptr{FuseReq}(cs.pointer)
+function Base.unsafe_convert(::Type{Ptr{T}}, s::SubArray{T,1}) where T
+    Ptr{T}(pointer_from_vector(s.parent)) + first(s.indices[1]) - 1
+end

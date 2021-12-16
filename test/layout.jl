@@ -53,3 +53,7 @@ end
     @test !is_template_fixed(LVarVector{L1,1})
     @test !is_template_fixed(LVarVector{L5,0})
 end
+
+struct L8 <: Layout
+    a::LFixedVector{Ptr{LVarVector{Float64, 1}},2}
+end
