@@ -20,11 +20,11 @@ Layout template for commandline arguments as to be passed to fuse_parse_cmdline
 """
 struct FuseCmdlineArgs <: Layout
     argc::Cint
-    argv::Ptr{LVarVector{Cstring, (x) -> x.argc}}
+    argv::Ptr{LVarVector{Cstring, (x) -> x.argc + 1}}
     allocated::Cint
 end
 
-struct FuseCmdlineOpts
+struct FuseCmdlineOpts <: Layout
     singlethread::Cint
     foreground::Cint
     debug::Cint
@@ -341,24 +341,17 @@ function docall(f::Function)
     nothing
 end
 
-function create_args(CMD::String, arg::AbstractVector{String})
-    argc = length(arg)
-    data = create_bytes(FuseCmdlineArgs, argc + 2)
-    args = CStructGuarded{FuseCmdlineArgs}(data)
-    argv = args.argv
-    args.argc = argc + 1
-    argv[1] = CMD
-    for i = 1:argc
-        argv[i+1] = arg[i]
-    end
-    args
+function create_args(cmd::String, arg::AbstractVector{String})
+    data = Cserialize(FuseCmdlineArgs, (argc = length(arg) + 1, argv = [cmd, arg..., nothing]))
+    CStructGuarded{FuseCmdlineArgs}(data)
 end
 
 function main_loop(args::AbstractVector{String}, fs::Module)
 
     fargs = create_args("command", args)
     opts = fuse_parse_cmdline(fargs)
-    println("parsed mountpoint $(opts.mountpoint)")
+    mountpoint = opts.mountpoint
+    println("parsed mountpoint $(mountpoint)")
 
     callbacks = filter_ops(fs)
 
@@ -368,11 +361,11 @@ function main_loop(args::AbstractVector{String}, fs::Module)
 
     se == C_NULL && throw(ArgumentError("fuse_session_new failed"))
 
-    println("going to mount at $(opts.mountpoint)")
-    rc = ccall((:fuse_session_mount, :libfuse3), Cint, (Ptr{Nothing}, Cstring), se, opts.mountpoint)
+    println("going to mount at $(mountpoint)")
+    rc = ccall((:fuse_session_mount, :libfuse3), Cint, (Ptr{Nothing}, Cstring), se, mountpoint)
     rc != 0 && throw(ArgumentError("fuse_session_mount failed"))
 
-    println("mounted at $(opts.mountpoint) - starting loop")
+    println("mounted at $(mountpoint) - starting loop")
     rc = ccall((:fuse_session_loop, :libfuse3), Cint, (Ptr{Nothing},), se)
     rc != 0 && throw(ArgumentError("fuse_session_loop failed"))
 
@@ -382,7 +375,7 @@ end
 
 
 function fuse_parse_cmdline(args::CStructAccess{FuseCmdlineArgs})
-    opts = create_bytes(FuseCmdlineOpts)
+    opts = Cserialize(FuseCmdlineOpts, ())
     popts = pointer_from_vector(opts)
     ccall((:fuse_parse_cmdline, :libfuse3), Cint, (Ptr{FuseCmdlineArgs}, Ptr{UInt8}), args, popts)
     CStructGuarded{FuseCmdlineOpts}(opts)

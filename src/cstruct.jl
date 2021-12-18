@@ -45,7 +45,7 @@ struct CStructGuarded{T,D} <: CStructAccess{T}
         new{T,D}(CStruct{T}(data), data)
     end
 end
-CStructGuarded(::Type{T}, veclens=()) where T = CStructGuarded{T}(create_bytes(T, veclens))
+CStructGuarded(::Type{T}, veclens=()) where T = CStructGuarded{T}(Cserialize(T, veclens))
 
 """
     CVector
