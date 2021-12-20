@@ -2,6 +2,7 @@
 export FuseLowlevelOps, register, main_loop
 export FUSE_INO_ROOT
 export FuseFileInfo, FuseEntryParam, FuseCmdlineArgs, FuseCmdlineOpts, FuseReq, FuseIno, FuseMode
+export FuseBufvec, FuseBuf, FuseBufFlags, FuseBufCopyFlags
 export Cstat, Cflock
 
 import Base.CFunction
@@ -247,7 +248,7 @@ end
 struct FuseBuf <: Layout
     size::Csize_t
     flags::FuseBufFlags
-    mem::Ptr{Cvoid}
+    mem::Ptr{LVarVector{UInt8, (x) -> x.size}}
     fd::Cint
     pos::Coff_t
 end
@@ -255,7 +256,7 @@ struct FuseBufvec <: Layout
     count::Csize_t
     idx::Csize_t
     off::Csize_t
-    buf::LVarVector{FuseBuf}
+    buf::LVarVector{FuseBuf, (x) -> x.count}
 end
 struct FuseForgetData
 end
@@ -265,7 +266,6 @@ const FUSE_IOCTL_UNRESTRICTED = Cuint(1 << 1)
 const FUSE_IOCTL_RETRY = Cuint(1 << 2)
 const FUSE_IOCTL_DIR = Cuint(1 << 4)
 const FUSE_IOCTL_MAX_IOV = 256
-
 
 # dummy function - should never by actually called
 noop(args...) = UV_ENOTSUP

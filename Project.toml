@@ -3,11 +3,11 @@ uuid = "67451fab-d9b0-4aa1-a584-3691f4a673db"
 authors = ["KlausC <klausC@users.noreply.github.com> and contributors"]
 version = "0.1.0"
 
-[extras]
-Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
-
 [compat]
 julia = "1.8"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 test = ["Test"]

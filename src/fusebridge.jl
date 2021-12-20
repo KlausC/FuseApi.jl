@@ -165,12 +165,12 @@ function Gread(read)
 end
 # F_WRITE = 17
 function Gwrite(write)
-    function Cwrite(req::FuseReq, ino::FuseIno, buf::Vector{UInt8}, size::Csize_t, off::Csize_t, fi::Ptr{FuseFileInfo})
+    function Cwrite(req::FuseReq, ino::FuseIno, cbuf::Ptr{UInt8}, size::Csize_t, off::Csize_t, fi::Ptr{FuseFileInfo})
         docall(req) do
-            write(req, ino, buf, size, off, CStruct(fi))   
+            write(req, ino, CVector{UInt8}(cbuf), size, off, CStruct(fi))   
         end
     end
-    (@cfunction $Cwrite Cvoid (FuseReq, FuseIno, Cstring, Culong, Culong, Ptr{FuseFileInfo}))
+    (@cfunction $Cwrite Cvoid (FuseReq, FuseIno, Ptr{UInt8}, Csize_t, Csize_t, Ptr{FuseFileInfo}))
 end
 # F_FLUSH = 18
 function Gflush(flush)
@@ -437,7 +437,7 @@ function fuse_reply_create(req::FuseReq, e::CStructAccess{FuseEntryParam}, fi::C
     ccall((:fuse_reply_create, :libfuse3), Cint, (FuseReq, Ptr{FuseEntryParam}, Ptr{FuseFileInfo}), req, e, fi)
 end
 function fuse_reply_data(req::FuseReq, bufv::CStructAccess{FuseBufvec}, flags::FuseBufCopyFlags)
-    ccall((:fuse_reply_data, :libfuse3), Cint, (FuseReq, Ptr{FuseBufvec}, Cint), req, bufv, flags)
+    ccall((:fuse_reply_data, :libfuse3), Cint, (FuseReq, Ptr{FuseBufvec}, Cint), req, bufv, flags.flag)
 end
 function fuse_reply_entry(req::FuseReq, entry::CStructAccess{FuseEntryParam})
     ccall((:fuse_reply_entry, :libfuse3), Cint, (FuseReq, Ptr{FuseEntryParam}), req, entry)

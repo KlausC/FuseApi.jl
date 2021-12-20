@@ -31,7 +31,7 @@ end
 
 abstract type Entity end
 
-struct File <: Entity
+mutable struct File <: Entity
     inode::Inode
     size::Int64
 end
@@ -79,13 +79,19 @@ end
 
 const ROOT = Directory(Inode(FUSE_INO_ROOT, S_IFDIR | X_UGO, 99), Direntry[])
 const INODES = Dict{FuseIno, Entity}(FUSE_INO_ROOT => ROOT)
+const DATA = Dict{FuseIno, Vector{UInt8}}()
 
-function example(parent, ino, name)
-    FILE2 = File(Inode(ino, S_IFREG | X_UGO, 1), 100)
-    push!(INODES, ino => FILE2)
+function example(parent, ino, name, data=nothing)
+    file = File(Inode(ino, S_IFREG | X_UGO, 1), 100)
+    push!(INODES, ino => file)
     push!(INODES[parent].direntries, Direntry(ino, name))
+    if data !== nothing
+        d =  convert(Vector{UInt8}, data)
+        file.size = length(d)
+        push!(DATA, ino => d)
+    end
 end
-example(1, 2, "xxx")
+example(1, 2, "xxx", codeunits("hello world 4711!"))
 
 function lookup(req::FuseReq, parent::FuseIno, name::String)
     println("lookup(req, $parent, $name) called")
@@ -172,11 +178,49 @@ function create(req::FuseReq, parent::FuseIno, name::String, mode::FuseMode, fi:
     fuse_reply_create(req, entry, fi)
 end
 
+function open(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
+    inode = INODES[ino]
+    if inode.inode.mode & S_IFMT == S_IFREG && fi.flags & JL_O_TRUNC != 0
+        inode.size = 0
+        delete!(DATA, ino)
+    end
+    fuse_reply_open(req, fi)
+end
 
+function read(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, fi::CStruct{FuseFileInfo})
+    save_fi(fi)
+    data = get(DATA, ino, UInt8[])
+    sz = min(length(data) - off, size)
+    bufv = CStructGuarded{FuseBufvec}(Cserialize(FuseBufvec, (count=1, buf=[(size=sz, mem = data)])))
+    println("read(req, $ino, $size, $off) called, buffer = $bufv")
+    fuse_reply_data(req, bufv, FuseBufCopyFlags(0))
+end
 
+const LASTFI = Any[]
 
+function write(req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, off::Integer, fi::CStruct{FuseFileInfo})
+    save_fi(fi)
+    inode = INODES[ino]
+    data = get!(DATA, ino, UInt8[])
+    total = off + size
+    if total > length(data)
+        resize!(data, total)
+        inode.size = total
+        for i = length(data)+1:off
+            data[i] = 0
+        end
+    end
+    for i = 1:size
+        data[off+i] = cvec[i]
+    end
+    fuse_reply_write(req, size)
+end
 
-
+function save_fi(fi::CStructAccess{T}) where T
+    u = collect(unsafe_load(Ptr{NTuple{sizeof(T),UInt8}}(pointer(fi))))
+    push!(LASTFI, u)
+    nothing
+end
 
 
 args = ["mountpoint", "-d", "-h", "-V", "-f" , "-s", "-o", "clone_fd", "-o", "max_idle_threads=5"]

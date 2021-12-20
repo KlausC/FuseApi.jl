@@ -146,7 +146,7 @@ end
 """
     get_from_pointer(::Ptr{T})
 
-For primitive types simply load value, convert to Julia accessor if required.
+For bits types simply load value, convert to Julia accessor if required.
 For struct types, create CStruct accessor.
 For vector types, create CVector accessor.
 """
@@ -169,7 +169,9 @@ function get_from_pointer(fp::Ptr{FT}, parent) where FT <: Cstring
 end
 
 function get_from_pointer(fp::Ptr{FT}, parent) where FT
-    if isprimitivetype(FT)
+    if FT <: Nothing
+        fp
+    elseif isbitstype(FT)
         unsafe_load(fp)
     else
         throw(ArgumentError("not supported layout type: $FT"))
