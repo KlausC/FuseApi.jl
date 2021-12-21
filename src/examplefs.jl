@@ -23,10 +23,13 @@ struct Direntry
     name::String
 end
 
-struct Inode
+mutable struct Inode
     ino::FuseIno
     mode::FuseMode
     nlink::Int64
+    atime::Timespec
+    mtime::Timespec
+    ctime::Timespec
 end
 
 abstract type Entity end
@@ -39,6 +42,14 @@ end
 struct Directory <: Entity
     inode::Inode
     direntries::Vector{Direntry}
+end
+
+Base.propertynames(e::E) where E<:Entity = (fieldnames(Inode)..., fieldnames(E)...)
+Base.getproperty(e::Entity, s::Symbol) = s in fieldnames(Inode) ? getfield(e.inode, s) : getfield(e, s)
+function Base.setproperty!(e::E, s::Symbol, v::Any) where E<:Entity
+    s in fieldnames(Inode) ?
+        setfield!(e.inode, s, convert(fieldtype(Inode, s), v)) :
+        setfield!(e, s, convert(fieldtype(E, s), v)) 
 end
 
 function Base.convert(::Type{Entity}, inode::Inode)
@@ -70,6 +81,9 @@ function status(inode::Inode)
     st.nlink = inode.nlink
     st.uid = 10003
     st.gid = 10000
+    st.atime = inode.atime
+    st.mtime = inode.mtime
+    st.ctime = inode.ctime
     st
 end
 
@@ -77,12 +91,13 @@ function status(ino::FuseIno)
     status(get(INODES, ino, nothing))
 end
 
-const ROOT = Directory(Inode(FUSE_INO_ROOT, S_IFDIR | X_UGO, 99), Direntry[])
+const ROOT = Directory(Inode(FUSE_INO_ROOT, S_IFDIR | X_UGO, 1, Timespec(0,0), Timespec(0,0), Timespec(0,0)), Direntry[])
 const INODES = Dict{FuseIno, Entity}(FUSE_INO_ROOT => ROOT)
 const DATA = Dict{FuseIno, Vector{UInt8}}()
 
 function example(parent, ino, name, data=nothing)
-    file = File(Inode(ino, S_IFREG | X_UGO, 1), 100)
+    t = timespec_now()
+    file = File(Inode(ino, S_IFREG | X_UGO, 1, t, t, t), 0)
     push!(INODES, ino => file)
     push!(INODES[parent].direntries, Direntry(ino, name))
     if data !== nothing
@@ -170,7 +185,8 @@ end
 
 function create(req::FuseReq, parent::FuseIno, name::String, mode::FuseMode, fi::CStruct{FuseFileInfo})
     ino = maximum(keys(INODES)) + 1
-    inode = Inode(ino, mode, 1)
+    t = timespec_now()
+    inode = convert(Entity, Inode(ino, mode, 1, t, t, t))
     push!(INODES, ino => inode)
     dir = INODES[parent]
     push!(dir.direntries, Direntry(ino, name))
@@ -180,7 +196,7 @@ end
 
 function open(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
     inode = INODES[ino]
-    if inode.inode.mode & S_IFMT == S_IFREG && fi.flags & JL_O_TRUNC != 0
+    if inode.mode & S_IFMT == S_IFREG && fi.flags & JL_O_TRUNC != 0
         inode.size = 0
         delete!(DATA, ino)
     end
@@ -193,6 +209,10 @@ function read(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, fi::CStru
     sz = min(length(data) - off, size)
     bufv = CStructGuarded{FuseBufvec}(Cserialize(FuseBufvec, (count=1, buf=[(size=sz, mem = data)])))
     println("read(req, $ino, $size, $off) called, buffer = $bufv")
+    if sz > 0
+        inode = INODES[ino]
+        inode.atime = timespec_now()
+    end
     fuse_reply_data(req, bufv, FuseBufCopyFlags(0))
 end
 
@@ -212,6 +232,11 @@ function write(req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, 
     end
     for i = 1:size
         data[off+i] = cvec[i]
+    end
+    if size > 0
+        t = timespec_now()
+        inode.mtime = t
+        inode.ctime = t
     end
     fuse_reply_write(req, size)
 end

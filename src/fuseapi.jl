@@ -1,11 +1,12 @@
 
-export FuseLowlevelOps, register, main_loop
+export FuseLowlevelOps, timespec_now, main_loop
 export FUSE_INO_ROOT
 export FuseFileInfo, FuseEntryParam, FuseCmdlineArgs, FuseCmdlineOpts, FuseReq, FuseIno, FuseMode
 export FuseBufvec, FuseBuf, FuseBufFlags, FuseBufCopyFlags
-export Cstat, Cflock
+export Cstat, Cflock, Timespec
 
 import Base.CFunction
+using Dates
 
 const CFu = Ptr{Cvoid}
 
@@ -390,4 +391,16 @@ end
 # Base.unsafe_convert(::Type{Ptr{FuseReq}}, cs::FuseReq) where T = Ptr{FuseReq}(cs.pointer)
 function Base.unsafe_convert(::Type{Ptr{T}}, s::SubArray{T,1}) where T
     Ptr{T}(pointer_from_vector(s.parent)) + first(s.indices[1]) - 1
+end
+
+"""
+    timespec_now()
+
+Current time in `Timespec` format (seconds and nanoseconds)
+"""
+function timespec_now()
+    a = (now(UTC) - DateTime(1970, 1, 1)).value
+    s, n = fldmod(a, 10^3)
+    n *= 10^6
+    Timespec(s, n)
 end
