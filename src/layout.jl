@@ -268,7 +268,9 @@ function _Cserialize!(::Type{T}, src::S, buf::Vector{UInt8}, off::Integer, rea, 
         f = fieldname(T, i)
         x = fieldoffset(T, i)
         if hasproperty(src, f)
-            noff = _Cserialize!(F, getfield(src, f), buf, off + x, rea, ctx)
+            noff = _Cserialize!(F, getproperty(src, f), buf, off + x, rea, ctx)
+        elseif F <: LVarVector
+            throw(ArgumentError("need src vector $f to determine length"))
         else
             noff = off + x + Base.aligned_sizeof(F)
         end
@@ -284,11 +286,11 @@ function _Cserialize!(::Type{<:LFixedVector{T,N}}, src::AbstractVector, buf::Vec
         off = align(off, T)
     end
     if N > n
-        off += Base.aligned_sizeof(T) * (N - n)
+        off += as * (N - n)
     end
     off
 end
-function _Cserialize!(::Type{<:LVarVector{T}}, src::AbstractVector, buf::Vector{UInt8}, off::Integer, rea, ctx) where T
+function _Cserialize!(::Type{S}, src::AbstractVector, buf::Vector{UInt8}, off::Integer, rea, ctx) where {T,F,S<:LVarVector{T,F}}
     for i = 1:length(src)
         off = _Cserialize!(T, src[i], buf, off, rea, ctx)
         off = align(off, T)

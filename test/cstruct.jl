@@ -95,9 +95,11 @@ struct B <: Layout
 end
 
 @testset "variable length vector in struct" begin
-    @test_throws ArgumentError create_bytes(B, (-3))
-    cs = CStruct{B}(create_bytes(B, (0)))
+    @test_throws ArgumentError Cserialize(B, ())
+    cs = CStruct{B}(Cserialize(B, (a=0, b=Float64[])))
     @test length(cs.b) == cs.a == 0
-    cs = CStruct{B}(create_bytes(B, (3)))
+    cs = CStruct{B}(Cserialize(B, (a=2, b=[1.0; 2; 3])))
+    @test length(cs.b) == cs.a == 2
+    cs.a = 3
     @test length(cs.b) == cs.a == 3
 end
