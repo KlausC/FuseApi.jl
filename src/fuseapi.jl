@@ -314,10 +314,11 @@ If the actual callback function throws or returns a value != 0
 An error reply is returned.
 """
 function docall(f::Function, req::FuseReq)
-    error = Base.UV_EAFNOSUPPORT
+    error = Base.UV_ENOTSUP
     try
         error = f()
     catch
+        error = UV_E2BIG
         rethrow()
     finally
         if error != 0

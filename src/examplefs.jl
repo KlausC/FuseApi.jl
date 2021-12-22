@@ -33,6 +33,10 @@ mutable struct Inode
     atime::Timespec
     mtime::Timespec
     ctime::Timespec
+    function Inode(ino, mode, nlink, size)
+        t = timespec_now()
+        new(ino, mode, nlink, size, t, t, t)
+    end
 end
 
 is_directory(inode::Inode) = inode.mode & S_IFMT == S_IFDIR
@@ -57,25 +61,19 @@ function status(ino::FuseIno)
     status(get(INODES, ino, nothing))
 end
 
-const ROOT = Inode(FUSE_INO_ROOT, S_IFDIR | X_UGO, 1, 0, timespec_now(), timespec_now(), timespec_now())
+const ROOT = Inode(FUSE_INO_ROOT, S_IFDIR | X_UGO, 1, 0)
 const INODES = Dict{FuseIno, Inode}(FUSE_INO_ROOT => ROOT)
 const DATA = Dict{FuseIno, Vector{UInt8}}()
 const DIR_DATA = Dict{FuseIno, Vector{Direntry}}()
 
-function example(parent, ino, name, data=nothing)
-    t = timespec_now()
-    file = Inode(ino, S_IFREG | X_UGO, 1, 0, t, t, t)
-    push!(INODES, ino => file)
-    direntries = get!(DIR_DATA, parent) do; Direntry[] end
-    push!(direntries, Direntry(ino, name))
-    INODES[parent].size = length(direntries)
+function example(parent, name, data=nothing)
+    file = do_create(parent, name, S_IFREG | X_UGO)
     if data !== nothing
         d =  convert(Vector{UInt8}, data)
         file.size = length(d)
-        push!(DATA, ino => d)
+        push!(DATA, file.ino => d)
     end
 end
-example(1, 2, "xxx", codeunits("hello world 4711!"))
 
 function lookup(req::FuseReq, parent::FuseIno, name::String)
     println("lookup(req, $parent, $name) called")
@@ -83,7 +81,8 @@ function lookup(req::FuseReq, parent::FuseIno, name::String)
     entry isa Number ? entry : fuse_reply_entry(req, entry)
 end
 
-function do_lookup(req::FuseReq, parent::FuseIno, name::String)
+function find_direntry(parent::Integer, name::AbstractString)
+    parent = FuseIno(parent)
     haskey(INODES, parent) || return UV_ENOENT
     dir = INODES[parent]
     is_directory(dir) || return UV_ENOTDIR
@@ -91,17 +90,16 @@ function do_lookup(req::FuseReq, parent::FuseIno, name::String)
     direntries = DIR_DATA[parent]
     k = findfirst(de -> de.name == name, direntries)
     k === nothing && return UV_ENOENT
-    sta = status(direntries[k].ino)
-    entry = CStructGuarded(FuseEntryParam)
-    entry.ino = sta.ino
+    direntries[k]
+end
+
+function do_lookup(req::FuseReq, parent::FuseIno, name::String)
+    de = find_direntry(parent, name)
+    de isa Number && return de
+    sta = status(de.ino)
+    entry = CStructGuarded(FuseEntryParam, (ino=de.ino, attr=sta))
     entry.attr_timeout = 0.0
     entry.entry_timeout = 1e19
-    st = entry.attr
-    st.ino = sta.ino
-    st.mode = sta.mode
-    st.uid = sta.uid
-    st.gid = sta.gid
-    st.size = sta.size
     entry
 end
 
@@ -153,16 +151,21 @@ function readdir(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStr
     fuse_reply_buf(req, buf, size - rem)
 end
 
-function create(req::FuseReq, parent::FuseIno, name::String, mode::FuseMode, fi::CStruct{FuseFileInfo})
+function do_create(parent::Integer, name::String, mode::Integer)
     dir = INODES[parent]
     is_directory(dir) || return UV_ENOTDIR
+    find_direntry(parent, name) == UV_ENOENT || return UV_EEXIST
     ino = maximum(keys(INODES)) + 1
-    t = timespec_now()
-    inode = Inode(ino, mode, 1, 0, t, t, t)
+    inode = Inode(ino, mode, 1, 0)
     push!(INODES, ino => inode)
     direntries = get!(DIR_DATA, parent) do; Direntry[] end
     push!(direntries, Direntry(ino, name))
-    dir.size = length(direntries)
+    touchdir(dir, direntries)
+    inode
+end
+
+function create(req::FuseReq, parent::FuseIno, name::String, mode::FuseMode, fi::CStruct{FuseFileInfo})
+    do_create(parent, name, mode)
     entry = do_lookup(req, parent, name)
     fuse_reply_create(req, entry, fi)
 end
@@ -178,13 +181,14 @@ end
 
 function read(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, fi::CStruct{FuseFileInfo})
     save_fi(fi)
+    haskey(INODES, ino) || return UV_ENOENT
+    inode = INODES[ino]
+    is_directory(inode) && return UV_ENOENT
     data = get(DATA, ino) do; UInt8[] end
     sz = max(min(length(data) - off, size), 0)
     bufv = CStructGuarded{FuseBufvec}(Cserialize(FuseBufvec, (count=1, buf=[(size=sz, mem = data)])))
-    println("read(req, $ino, $size, $off) called, buffer = $bufv")
     if sz > 0
-        inode = INODES[ino]
-        inode.atime = timespec_now()
+        toucha(inode)
     end
     fuse_reply_data(req, bufv, FuseBufCopyFlags(0))
 end
@@ -194,6 +198,7 @@ const LASTFI = Any[]
 function write(req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, off::Integer, fi::CStruct{FuseFileInfo})
     save_fi(fi)
     inode = INODES[ino]
+    is_directory(inode) && return UV_ENOENT
     data = get!(DATA, ino, UInt8[])
     total = off + size
     if total > length(data)
@@ -207,12 +212,56 @@ function write(req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, 
         data[off+i] = cvec[i]
     end
     if size > 0
-        t = timespec_now()
-        inode.mtime = t
-        inode.ctime = t
+        touch(inode)
     end
     fuse_reply_write(req, size)
 end
+
+function link(req::FuseReq, ino::FuseIno, newparent::FuseIno, name::String)
+    inode = INODES[ino]
+    is_directory(inode) && return UV_EPERM
+    dir = INODES[newparent]
+    is_directory(dir) || return UV_ENOTDIR
+    find_direntry(newparent, name) == UV_ENOENT || return UV_EEXIST
+    direntries = get!(DIR_DATA, newparent) do; Direntry[] end
+    push!(direntries, Direntry(ino, name))
+    touchdir(dir, direntries)
+    inode.nlink += 1
+    entry = do_lookup(req, newparent, name)
+    fuse_reply_entry(req, entry)
+end
+
+function unlink(req::FuseReq, parent::FuseIno, name::String)
+    de = find_direntry(parent, name)
+    de isa Number && return de
+    direntries = DIR_DATA[parent]
+    k = findfirst(de -> de.name == name, direntries)
+    deleteat!(direntries, k)
+    dir = INODES[parent]
+    touchdir(dir, direntries)
+    inode = INODES[de.ino]
+    inode.nlink -= 1
+    if inode.nlink <= 0
+        delete!(INODES, de.ino)
+    end
+    return fuse_reply_err(req, 0)
+end
+
+function touchdir(dir, direntries)
+    dir.size = length(direntries)
+    touch(dir)
+end
+
+function touch(inode::Inode)
+    t = timespec_now()
+    inode.mtime = t
+    inode.ctime = t
+end
+function toucha(inode::Inode)
+    t = timespec_now()
+    inode.atime = t
+end
+
 
 function save_fi(fi::CStructAccess{T}) where T
     u = collect(unsafe_load(Ptr{NTuple{sizeof(T),UInt8}}(pointer(fi))))
@@ -220,9 +269,12 @@ function save_fi(fi::CStructAccess{T}) where T
     nothing
 end
 
+example(1, "xxx", codeunits("hello world 4711!\n"))
 
 args = ["mountpoint", "-d", "-h", "-V", "-f" , "-s", "-o", "clone_fd", "-o", "max_idle_threads=5"]
 
-run() = main_loop(args, @__MODULE__)
+using Base.Threads
+
+run() = @spawn main_loop($args, @__MODULE__)
 
 end # module ExampleFs

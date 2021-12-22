@@ -40,12 +40,12 @@ end
 
 struct CStructGuarded{T,D} <: CStructAccess{T}
     cs::CStruct{T}
-    guide::Vector{D}
+    guard::Vector{D}
     function CStructGuarded{T}(data::Vector{D}) where {T,D<:Union{Integer,Ptr}}
         new{T,D}(CStruct{T}(data), data)
     end
 end
-CStructGuarded(::Type{T}, veclens=()) where T = CStructGuarded{T}(Cserialize(T, veclens))
+CStructGuarded(::Type{T}, src=()) where T = CStructGuarded{T}(Cserialize(T, src))
 
 """
     CVector
