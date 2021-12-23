@@ -38,9 +38,9 @@ mutable struct Inode
     atime::Timespec
     mtime::Timespec
     ctime::Timespec
-    function Inode(ino, mode, nlink, size)
+    function Inode(ino, mode, nlink, size, uid, gid)
         t = timespec_now()
-        new(ino, mode, nlink, size, 0, 0, t, t, t)
+        new(ino, mode, nlink, size, uid, gid, t, t, t)
     end
 end
 
@@ -53,12 +53,12 @@ function status(inode::Inode)
     st.ino = inode.ino
     st.mode = inode.mode
     st.nlink = inode.nlink
-    st.uid = 10003
-    st.gid = 10000
+    st.uid = inode.uid
+    st.gid = inode.gid
+    st.size = inode.size
     st.atime = inode.atime
     st.mtime = inode.mtime
     st.ctime = inode.ctime
-    st.size = inode.size
     st
 end
 
@@ -66,7 +66,7 @@ function status(ino::FuseIno)
     status(get(INODES, ino, nothing))
 end
 
-const ROOT = Inode(FUSE_INO_ROOT, S_IFDIR | X_UGO, 1, 0)
+const ROOT = Inode(FUSE_INO_ROOT, S_IFDIR | X_UGO, 1, 0, 0, 0)
 const INODES = Dict{FuseIno, Inode}(FUSE_INO_ROOT => ROOT)
 const DATA = Dict{FuseIno, Vector{UInt8}}()
 const DIR_DATA = Dict{FuseIno, Vector{Direntry}}()
@@ -121,16 +121,19 @@ end
 function setattr(req::FuseReq, ino::FuseIno, st::CStruct{Cstat}, to_set::Integer, fi::CStruct{FuseFileInfo})
     haskey(INODES, ino) || return UV_ENOENT
     inode = INODES[ino]
+    resetsuid = false
     if to_set & FUSE_SET_ATTR_MODE != 0
         inode.mode = st.mode
     end 
     if to_set & FUSE_SET_ATTR_UID != 0
+        resetsuid |= inode.uid != st.uid
         inode.uid = st.uid
     end
     if to_set & FUSE_SET_ATTR_GID != 0
         inode.gid = st.gid
     end
     if to_set & FUSE_SET_ATTR_SIZE != 0
+        resetsuid |= inode.size != st.size
         inode.size = st.size
     end
     if to_set & FUSE_SET_ATTR_ATIME != 0
@@ -150,6 +153,9 @@ function setattr(req::FuseReq, ino::FuseIno, st::CStruct{Cstat}, to_set::Integer
     end
     if to_set & FUSE_SET_ATTR_CTIME != 0
         inode.ctime = st.ctime   
+    end
+    if resetsuid
+        inode.mode &= ~(S_ISUID | S_ISGID)
     end
     getattr(req, ino, fi)
 end
@@ -199,7 +205,9 @@ function do_create(parent::Integer, name::String, mode::Integer)
     is_directory(dir) || return UV_ENOTDIR
     lookup_ino(parent, name) == 0 || return UV_EEXIST
     ino = maximum(keys(INODES)) + 1
-    inode = Inode(ino, mode, 1, 0)
+    uid = 10003
+    gid = 10000
+    inode = Inode(ino, mode, 1, 0, uid, gid)
     push!(INODES, ino => inode)
     direntries = get_direntries!(parent)
     push!(direntries, Direntry(ino, name))
@@ -252,11 +260,11 @@ function write(req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, 
     end
     for i = 1:size
         data[off+i] = cvec[i]
-        println("written($(cvec[i])")
     end
     inode.size = length(data)
     if size > 0
         touch(inode, T_MTIME | T_CTIME)
+        inode.mode &= ~(S_ISUID | S_ISGID)
     end
     fuse_reply_write(req, size)
 end
