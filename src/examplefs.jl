@@ -1,6 +1,8 @@
 module ExampleFs
 using ..FuseApi
 
+import Base: open, read, write, unlink, rename, readdir
+
 using Base.Filesystem
 import Base.Filesystem: S_IFDIR, S_IFREG, S_IFCHR, S_IFBLK, S_IFIFO, S_IFLNK, S_IFSOCK, S_IFMT
 import Base.Filesystem: S_IRWXU, S_IRWXG, S_IRWXO

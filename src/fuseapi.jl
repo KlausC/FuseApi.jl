@@ -307,7 +307,7 @@ end
 
 function getp(m, f::Symbol, def)
     try
-        if f in names(m, all=true)
+        if f in names(m, all=true, imported=true)
             getproperty(m, f)
         else
             def
