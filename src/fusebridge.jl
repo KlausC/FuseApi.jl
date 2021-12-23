@@ -58,9 +58,9 @@ function Ggetattr(getattr)
 end
 # F_SETATTR = 6
 function Gsetattr(setattr)
-    function Csetattr(req::FuseReq, ino::FuseIno, attr::Cstat, to_set::Cint, fi::Ptr{FuseFileInfo})
+    function Csetattr(req::FuseReq, ino::FuseIno, attr::Ptr{Cstat}, to_set::Cint, fi::Ptr{FuseFileInfo})
         docall(req) do
-             setattr(req, ino, attr, to_set, CStruct(fi))
+             setattr(req, ino, CStruct(attr), to_set, CStruct(fi))
         end
     end
     (@cfunction $Csetattr Cvoid (FuseReq, FuseIno, Ptr{Cstat}, Cint, Ptr{FuseFileInfo}))
@@ -133,7 +133,7 @@ function Grename(rename)
             rename(req, parent, name, newparent, newname, flags)       
         end
     end
-    (@cfunction $Crename Cvoid (FuseReq, FuseIno, Cstring, FuseIno, Cstring))
+    (@cfunction $Crename Cvoid (FuseReq, FuseIno, Cstring, FuseIno, Cstring, Cuint))
 end
 # F_LINK = 14
 function Glink(link)

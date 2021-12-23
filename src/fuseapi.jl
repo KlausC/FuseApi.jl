@@ -1,9 +1,12 @@
 
 export FuseLowlevelOps, timespec_now, main_loop
-export FUSE_INO_ROOT
+export FUSE_INO_ROOT, RENAME_NOREPLACE, RENAME_EXCHANGE
 export FuseFileInfo, FuseEntryParam, FuseCmdlineArgs, FuseCmdlineOpts, FuseReq, FuseIno, FuseMode
 export FuseBufvec, FuseBuf, FuseBufFlags, FuseBufCopyFlags
 export Cstat, Cflock, Timespec
+
+export FUSE_SET_ATTR_MODE, FUSE_SET_ATTR_UID, FUSE_SET_ATTR_GID, FUSE_SET_ATTR_SIZE
+export FUSE_SET_ATTR_ATIME, FUSE_SET_ATTR_MTIME, FUSE_SET_ATTR_ATIME_NOW, FUSE_SET_ATTR_MTIME_NOW, FUSE_SET_ATTR_CTIME
 
 import Base.CFunction
 using Dates
@@ -129,7 +132,7 @@ end
 
 struct Timespec <: Layout
     seconds::Int64
-    ns::Int64
+    nanoseconds::Int64
 end
 
 struct FuseCtx <: Layout
@@ -262,11 +265,25 @@ end
 struct FuseForgetData
 end
 
+const FUSE_SET_ATTR_MODE      = Cuint(1 << 0)
+const FUSE_SET_ATTR_UID       = Cuint(1 << 1)
+const FUSE_SET_ATTR_GID       = Cuint(1 << 2)
+const FUSE_SET_ATTR_SIZE      = Cuint(1 << 3)
+const FUSE_SET_ATTR_ATIME     = Cuint(1 << 4)
+const FUSE_SET_ATTR_MTIME     = Cuint(1 << 5)
+const FUSE_SET_ATTR_ATIME_NOW = Cuint(1 << 7)
+const FUSE_SET_ATTR_MTIME_NOW = Cuint(1 << 8)
+const FUSE_SET_ATTR_CTIME     = Cuint(1 << 10)
+
 const FUSE_IOCTL_COMPAT = Cuint(1 << 0)
 const FUSE_IOCTL_UNRESTRICTED = Cuint(1 << 1)
 const FUSE_IOCTL_RETRY = Cuint(1 << 2)
 const FUSE_IOCTL_DIR = Cuint(1 << 4)
 const FUSE_IOCTL_MAX_IOV = 256
+
+# for replace function
+const RENAME_NOREPLACE = (1 << 0)
+const RENAME_EXCHANGE = (1 << 1)
 
 # dummy function - should never by actually called
 noop(args...) = UV_ENOTSUP
@@ -318,7 +335,7 @@ function docall(f::Function, req::FuseReq)
     try
         error = f()
     catch
-        error = UV_E2BIG
+        error = Base.UV_EACCES
         rethrow()
     finally
         if error != 0
@@ -393,6 +410,8 @@ end
 function Base.unsafe_convert(::Type{Ptr{T}}, s::SubArray{T,1}) where T
     Ptr{T}(pointer_from_vector(s.parent)) + first(s.indices[1]) - 1
 end
+
+Base.convert(::Type{Timespec}, t::CStruct{Timespec}) = Timespec(t.seconds, t.nanoseconds)
 
 """
     timespec_now()

@@ -19,6 +19,9 @@ const DIR2 = ".."
 
 const DEFAULT_MODE = S_IFREG | X_UGO
 
+const T_ATIME = 0x0001
+const T_MTIME = 0x0002
+const T_CTIME = 0x0004
 
 struct Direntry
     ino::FuseIno
@@ -30,12 +33,14 @@ mutable struct Inode
     mode::FuseMode
     nlink::Int64
     size::UInt64
+    uid::UInt32
+    gid::UInt32
     atime::Timespec
     mtime::Timespec
     ctime::Timespec
     function Inode(ino, mode, nlink, size)
         t = timespec_now()
-        new(ino, mode, nlink, size, t, t, t)
+        new(ino, mode, nlink, size, 0, 0, t, t, t)
     end
 end
 
@@ -76,7 +81,6 @@ function example(parent, name, data=nothing)
 end
 
 function lookup(req::FuseReq, parent::FuseIno, name::String)
-    println("lookup(req, $parent, $name) called")
     entry = do_lookup(req, parent, name)
     entry isa Number ? entry : fuse_reply_entry(req, entry)
 end
@@ -84,32 +88,70 @@ end
 function find_direntry(parent::Integer, name::AbstractString)
     parent = FuseIno(parent)
     haskey(INODES, parent) || return UV_ENOENT
-    dir = INODES[parent]
-    is_directory(dir) || return UV_ENOTDIR
-    haskey(DIR_DATA, parent) || return UV_ENOENT
+    is_directory(INODES[parent]) || return UV_ENOTDIR
+    ino = lookup_ino(parent, name)
+    ino == 0 ? UV_ENOENT : ino
+end
+
+function lookup_ino(parent::Integer, name::AbstractString)
+    haskey(DIR_DATA, parent) || return 0
     direntries = DIR_DATA[parent]
     k = findfirst(de -> de.name == name, direntries)
-    k === nothing && return UV_ENOENT
-    direntries[k]
+    k === nothing ? 0 : direntries[k].ino
 end
 
 function do_lookup(req::FuseReq, parent::FuseIno, name::String)
-    de = find_direntry(parent, name)
-    de isa Number && return de
-    sta = status(de.ino)
-    entry = CStructGuarded(FuseEntryParam, (ino=de.ino, attr=sta))
+    ino = find_direntry(parent, name)
+    ino <= 0 && return ino
+    sta = status(ino)
+    entry = CStructGuarded(FuseEntryParam, (ino=ino, attr=sta))
     entry.attr_timeout = 0.0
     entry.entry_timeout = 1e19
     entry
 end
 
 function getattr(req::FuseReq, ino::FuseIno, ::CStruct{FuseFileInfo})
-    println("getattr(req, $ino, ...) called")
     haskey(INODES, ino) || return UV_ENOENT
     en = INODES[ino]
     attr = status(en)
     attr_timeout = 10.0
     fuse_reply_attr(req, attr, attr_timeout)
+end
+
+function setattr(req::FuseReq, ino::FuseIno, st::CStruct{Cstat}, to_set::Integer, fi::CStruct{FuseFileInfo})
+    haskey(INODES, ino) || return UV_ENOENT
+    inode = INODES[ino]
+    if to_set & FUSE_SET_ATTR_MODE != 0
+        inode.mode = st.mode
+    end 
+    if to_set & FUSE_SET_ATTR_UID != 0
+        inode.uid = st.uid
+    end
+    if to_set & FUSE_SET_ATTR_GID != 0
+        inode.gid = st.gid
+    end
+    if to_set & FUSE_SET_ATTR_SIZE != 0
+        inode.size = st.size
+    end
+    if to_set & FUSE_SET_ATTR_ATIME != 0
+        inode.atime = st.atime
+    end
+    if to_set & FUSE_SET_ATTR_MTIME != 0
+        inode.mtime = st.mtime
+    end
+    if to_set & (FUSE_SET_ATTR_ATIME_NOW | FUSE_SET_ATTR_MTIME_NOW) != 0
+        t = timespec_now()
+        if to_set & FUSE_SET_ATTR_ATIME_NOW != 0
+            inode.atime = t
+        end
+        if to_set & FUSE_SET_ATTR_MTIME_NOW != 0
+            inode.mtime = t
+        end
+    end
+    if to_set & FUSE_SET_ATTR_CTIME != 0
+        inode.ctime = st.ctime   
+    end
+    getattr(req, ino, fi)
 end
 
 function opendir(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
@@ -121,13 +163,12 @@ function releasedir(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
 end
 
 function readdir(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
-    println("readdir(req, $ino, $size, $off, fi) called")
     buf = Vector{UInt8}(undef, size)
     dir = INODES[ino]
     is_directory(dir) || return UV_ENOTDIR
     i = off + 1
     p = 1
-    des = get(DIR_DATA, ino) do; Direntry[] end
+    des = get_direntries(ino)
     n = length(des)
     rem = size
     while i <= n + 2
@@ -140,7 +181,6 @@ function readdir(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStr
             name = de.name
         end
         entsize = fuse_add_direntry(req, view(buf, p:size), name, st, i)
-        println("add_direntry($(name), $i) = $entsize called")
         if entsize > rem
             break
         end
@@ -148,19 +188,22 @@ function readdir(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStr
         rem -= entsize
         i += 1
     end
+    if p > 1
+        touch(dir, T_ATIME)
+    end
     fuse_reply_buf(req, buf, size - rem)
 end
 
 function do_create(parent::Integer, name::String, mode::Integer)
     dir = INODES[parent]
     is_directory(dir) || return UV_ENOTDIR
-    find_direntry(parent, name) == UV_ENOENT || return UV_EEXIST
+    lookup_ino(parent, name) == 0 || return UV_EEXIST
     ino = maximum(keys(INODES)) + 1
     inode = Inode(ino, mode, 1, 0)
     push!(INODES, ino => inode)
-    direntries = get!(DIR_DATA, parent) do; Direntry[] end
+    direntries = get_direntries!(parent)
     push!(direntries, Direntry(ino, name))
-    touchdir(dir, direntries)
+    touchdir(dir, direntries, T_MTIME | T_CTIME)
     inode
 end
 
@@ -188,7 +231,7 @@ function read(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, fi::CStru
     sz = max(min(length(data) - off, size), 0)
     bufv = CStructGuarded{FuseBufvec}(Cserialize(FuseBufvec, (count=1, buf=[(size=sz, mem = data)])))
     if sz > 0
-        toucha(inode)
+        touch(inode, T_ATIME)
     end
     fuse_reply_data(req, bufv, FuseBufCopyFlags(0))
 end
@@ -203,16 +246,17 @@ function write(req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, 
     total = off + size
     if total > length(data)
         resize!(data, total)
-        inode.size = total
         for i = length(data)+1:off
             data[i] = 0
         end
     end
     for i = 1:size
         data[off+i] = cvec[i]
+        println("written($(cvec[i])")
     end
+    inode.size = length(data)
     if size > 0
-        touch(inode)
+        touch(inode, T_MTIME | T_CTIME)
     end
     fuse_reply_write(req, size)
 end
@@ -222,46 +266,95 @@ function link(req::FuseReq, ino::FuseIno, newparent::FuseIno, name::String)
     is_directory(inode) && return UV_EPERM
     dir = INODES[newparent]
     is_directory(dir) || return UV_ENOTDIR
-    find_direntry(newparent, name) == UV_ENOENT || return UV_EEXIST
-    direntries = get!(DIR_DATA, newparent) do; Direntry[] end
+    lookup_ino(newparent, name) == 0 || return UV_EEXIST
+    direntries = get_direntries!(newparent)
     push!(direntries, Direntry(ino, name))
-    touchdir(dir, direntries)
+    touchdir(dir, direntries, T_MTIME | T_CTIME)
     inode.nlink += 1
     entry = do_lookup(req, newparent, name)
     fuse_reply_entry(req, entry)
 end
 
 function unlink(req::FuseReq, parent::FuseIno, name::String)
-    de = find_direntry(parent, name)
-    de isa Number && return de
-    direntries = DIR_DATA[parent]
-    k = findfirst(de -> de.name == name, direntries)
-    deleteat!(direntries, k)
+    ino = find_direntry(parent, name)
+    ino <= 0 && return ino
+    direntries = get_direntries(parent)
+    deleteat!(direntries, findall(de -> de.name == name, direntries))
     dir = INODES[parent]
-    touchdir(dir, direntries)
-    inode = INODES[de.ino]
+    touchdir(dir, direntries, T_MTIME | T_CTIME)
+    inode = INODES[ino]
     inode.nlink -= 1
     if inode.nlink <= 0
-        delete!(INODES, de.ino)
+        delete!(INODES, ino)
+    else
+        touch(inode, T_CTIME)
     end
     return fuse_reply_err(req, 0)
 end
 
-function touchdir(dir, direntries)
+function rename(req::FuseReq, parent::FuseIno, name::String, newparent::FuseIno, newname::String, flags::Integer)
+
+    if parent == newparent && name == newname
+        return fuse_reply_err(req, 0)
+    end
+    dir = INODES[parent]
+    dirnew = parent == newparent ? dir : INODES[newparent]
+    ino = lookup_ino(parent, name)
+    ino == 0 && return UV_ENOENT
+    newino = lookup_ino(newparent, newname)
+    newino == 0 && flags == RENAME_EXCHANGE && return UV_ENOENT
+    newino != 0 && flags == RENAME_NOREPLACE && return UV_EEXIST
+    des = get_direntries(parent)
+    desnew = parent == newparent ? des : get_direntries!(newparent)
+    k = findfirst(de -> de.name == name, des)::Integer
+    de = des[k]
+    knew = newino == 0 ? 0 : findfirst(de -> de.name == newname, desnew)::Integer
+
+    if flags == RENAME_EXCHANGE
+        den = desnew[knew]
+        des[k] = Direntry(de.ino, den.name)
+        desnew[knew] = Direntry(den.ino, de.name)
+    else
+        if knew != 0 # && flags != RENAME_NOREPLACE 
+            deleteat!(desnew, knew)
+        end
+        if parent == newparent
+            des[k] = Direntry(de.ino, newname)
+        else
+            push!(desnew, name == newname ? des[k] : Direntry(de.ino, newname))
+            deleteat!(des, k)
+        end
+    end
+
+    touchdir(dir, des, T_MTIME | T_CTIME)
+    if parent != newparent
+        touchdir(dirnew, desnew, T_MTIME | T_CTIME)
+    end
+    fuse_reply_err(req, 0)
+end
+
+# utility functions
+get_direntries(ino::Integer) = get(DIR_DATA, ino) do; Direntry[] end
+get_direntries!(ino::Integer) = get!(DIR_DATA, ino) do; Direntry[] end
+
+function touchdir(dir::Inode, direntries, mode)
     dir.size = length(direntries)
-    touch(dir)
+    touch(dir, mode)
 end
 
-function touch(inode::Inode)
+function Base.touch(inode::Inode, mode::UInt16)
     t = timespec_now()
-    inode.mtime = t
-    inode.ctime = t
+    if mode & T_ATIME != 0
+        inode.atime = t
+    end
+    if mode & T_MTIME != 0
+        inode.mtime = t
+    end
+    if mode & T_CTIME != 0
+        inode.ctime = t
+    end
+    t
 end
-function toucha(inode::Inode)
-    t = timespec_now()
-    inode.atime = t
-end
-
 
 function save_fi(fi::CStructAccess{T}) where T
     u = collect(unsafe_load(Ptr{NTuple{sizeof(T),UInt8}}(pointer(fi))))
@@ -275,6 +368,8 @@ args = ["mountpoint", "-d", "-h", "-V", "-f" , "-s", "-o", "clone_fd", "-o", "ma
 
 using Base.Threads
 
-run() = @spawn main_loop($args, @__MODULE__)
+bg() = @spawn main_loop($args, @__MODULE__)
+
+fg() = main_loop(args, @__MODULE__)
 
 end # module ExampleFs
