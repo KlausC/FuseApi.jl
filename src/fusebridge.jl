@@ -3,7 +3,7 @@
 export fuse_reply_attr, fuse_reply_bmap, fuse_reply_buf, fuse_reply_create, fuse_reply_data, fuse_reply_entry, fuse_reply_err
 export fuse_reply_ioctl, fuse_reply_ioctl_iov, fuse_reply_ioctl_retry, fuse_reply_iov, fuse_reply_lock, fuse_reply_lseek
 export fuse_reply_attrfuse_reply_none, fuse_reply_open, fuse_reply_poll, fuse_reply_readlink, fuse_reply_statfs, fuse_reply_write, fuse_reply_xattr
-export fuse_add_direntry, fuse_add_direntry_plus
+export fuse_add_direntry, fuse_add_direntry_plus, fuse_req_ctx
 
 export fuse_req_ctx, fuse_req_getgroups, fuse_req_interrupt_func, fuse_req_interrupted, fuse_req_userdata
 
@@ -486,9 +486,6 @@ function fuse_reply_xattr(req::FuseReq, count::Integer)
 end
 
 # accessors for req
-function fuse_req_ctx(req::FuseReq)
-    CStruct{FuseCtx}(ccall((:fuse_req_ctx, :libfuse3), Ptr{FuseCtx}, (FuseReq,), req))
-end
 function fuse_req_getgroups(req::FuseReq, list::Vector{Cgid_t})
     ccall((:fuse_req_getgroups, :libfuse3), Cint, (FuseReq, Cint, Ptr{Cgid_t}), req, length(list), pointer_from_vector(list))
 end
@@ -514,4 +511,9 @@ end
 function fuse_add_direntry_plus(req::FuseReq, buf::AbstractVector{UInt8}, name::String, e::CStructAccess{FuseEntryParam}, off::Integer)
     bufsz = length(buf)
     ccall((:fuse_add_direntry_plus, :libfuse3), Csize_t, (FuseReq, Ptr{UInt8}, Csize_t, Cstring, Ptr{FuseEntryParam}, Coff_t), req, buf, bufsz, name, e, off)
+end
+
+function fuse_req_ctx(req::FuseReq)
+    cdata = ccall((:fuse_req_ctx, :libfuse3), Ptr{FuseCtx}, (FuseReq,), req)
+    CStruct(cdata)
 end

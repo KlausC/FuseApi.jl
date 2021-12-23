@@ -72,7 +72,7 @@ const DATA = Dict{FuseIno, Vector{UInt8}}()
 const DIR_DATA = Dict{FuseIno, Vector{Direntry}}()
 
 function example(parent, name, data=nothing)
-    file = do_create(parent, name, S_IFREG | X_UGO)
+    file = do_create(parent, name, S_IFREG | X_UGO, 0, 0)
     if data !== nothing
         d =  convert(Vector{UInt8}, data)
         file.size = length(d)
@@ -200,13 +200,11 @@ function readdir(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStr
     fuse_reply_buf(req, buf, size - rem)
 end
 
-function do_create(parent::Integer, name::String, mode::Integer)
+function do_create(parent::Integer, name::String, mode::Integer, uid::Integer, gid::Integer)
     dir = INODES[parent]
     is_directory(dir) || return UV_ENOTDIR
     lookup_ino(parent, name) == 0 || return UV_EEXIST
     ino = maximum(keys(INODES)) + 1
-    uid = 10003
-    gid = 10000
     inode = Inode(ino, mode, 1, 0, uid, gid)
     push!(INODES, ino => inode)
     direntries = get_direntries!(parent)
@@ -216,7 +214,12 @@ function do_create(parent::Integer, name::String, mode::Integer)
 end
 
 function create(req::FuseReq, parent::FuseIno, name::String, mode::FuseMode, fi::CStruct{FuseFileInfo})
-    do_create(parent, name, mode)
+    ctx = fuse_req_ctx(req)
+    uid = ctx.uid
+    gid = ctx.gid
+    umask = ctx.umask
+    mode = mode & ~umask | mode & ~X_UGO
+    do_create(parent, name, mode, uid, gid)
     entry = do_lookup(req, parent, name)
     fuse_reply_create(req, entry, fi)
 end
@@ -230,8 +233,7 @@ function open(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
     fuse_reply_open(req, fi)
 end
 
-function read(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, fi::CStruct{FuseFileInfo})
-    save_fi(fi)
+function read(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
     haskey(INODES, ino) || return UV_ENOENT
     inode = INODES[ino]
     is_directory(inode) && return UV_ENOENT
@@ -246,8 +248,7 @@ end
 
 const LASTFI = Any[]
 
-function write(req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, off::Integer, fi::CStruct{FuseFileInfo})
-    save_fi(fi)
+function write(req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
     inode = INODES[ino]
     is_directory(inode) && return UV_ENOENT
     data = get!(DATA, ino, UInt8[])
@@ -362,12 +363,6 @@ function Base.touch(inode::Inode, mode::UInt16)
         inode.ctime = t
     end
     t
-end
-
-function save_fi(fi::CStructAccess{T}) where T
-    u = collect(unsafe_load(Ptr{NTuple{sizeof(T),UInt8}}(pointer(fi))))
-    push!(LASTFI, u)
-    nothing
 end
 
 example(1, "xxx", codeunits("hello world 4711!\n"))

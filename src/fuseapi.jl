@@ -136,9 +136,9 @@ struct Timespec <: Layout
 end
 
 struct FuseCtx <: Layout
-    uid::UInt32
-    gid::UInt32
-    pid::UInt32
+    uid::Cuid_t
+    gid::Cgid_t
+    pid::Cpid_t
     umask::FuseMode
 end
 
