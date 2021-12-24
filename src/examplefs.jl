@@ -82,6 +82,7 @@ function example(parent, name, data=nothing)
     end
 end
 
+export lookup
 function lookup(req::FuseReq, parent::FuseIno, name::String)
     entry = do_lookup(req, parent, name)
     entry isa Number ? entry : fuse_reply_entry(req, entry)
@@ -112,6 +113,7 @@ function do_lookup(req::FuseReq, parent::FuseIno, name::String)
     entry
 end
 
+export getattr
 function getattr(req::FuseReq, ino::FuseIno, ::CStruct{FuseFileInfo})
     haskey(INODES, ino) || return UV_ENOENT
     en = INODES[ino]
@@ -120,6 +122,7 @@ function getattr(req::FuseReq, ino::FuseIno, ::CStruct{FuseFileInfo})
     fuse_reply_attr(req, attr, attr_timeout)
 end
 
+export setattr
 function setattr(req::FuseReq, ino::FuseIno, st::CStruct{Cstat}, to_set::Integer, fi::CStruct{FuseFileInfo})
     haskey(INODES, ino) || return UV_ENOENT
     inode = INODES[ino]
@@ -162,14 +165,17 @@ function setattr(req::FuseReq, ino::FuseIno, st::CStruct{Cstat}, to_set::Integer
     getattr(req, ino, fi)
 end
 
+export opendir
 function opendir(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
     fuse_reply_open(req, fi)
 end
 
+export releasedir
 function releasedir(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
     fuse_reply_err(req, 0)
 end
 
+export readdir
 function readdir(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
     buf = Vector{UInt8}(undef, size)
     dir = INODES[ino]
@@ -182,7 +188,7 @@ function readdir(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStr
     while i <= n + 2
         if i <= 2
             st = status(dir)
-            name = "."^i
+            name = i == 1 ? DIR1 : DIR2
         else
             de = des[i-2]
             st = status(de.ino)
@@ -215,6 +221,7 @@ function do_create(parent::Integer, name::String, mode::Integer, uid::Integer, g
     inode
 end
 
+export create
 function create(req::FuseReq, parent::FuseIno, name::String, mode::FuseMode, fi::CStruct{FuseFileInfo})
     ctx = fuse_req_ctx(req)
     uid = ctx.uid
@@ -226,6 +233,7 @@ function create(req::FuseReq, parent::FuseIno, name::String, mode::FuseMode, fi:
     fuse_reply_create(req, entry, fi)
 end
 
+export open
 function open(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
     inode = INODES[ino]
     if is_regular(inode) && fi.flags & JL_O_TRUNC != 0
@@ -235,6 +243,7 @@ function open(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
     fuse_reply_open(req, fi)
 end
 
+export read
 function read(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
     haskey(INODES, ino) || return UV_ENOENT
     inode = INODES[ino]
@@ -248,8 +257,7 @@ function read(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStruct
     fuse_reply_data(req, bufv, FuseBufCopyFlags(0))
 end
 
-const LASTFI = Any[]
-
+export write
 function write(req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
     inode = INODES[ino]
     is_directory(inode) && return UV_ENOENT
@@ -272,6 +280,7 @@ function write(req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, 
     fuse_reply_write(req, size)
 end
 
+export link
 function link(req::FuseReq, ino::FuseIno, newparent::FuseIno, name::String)
     inode = INODES[ino]
     is_directory(inode) && return UV_EPERM
@@ -286,6 +295,7 @@ function link(req::FuseReq, ino::FuseIno, newparent::FuseIno, name::String)
     fuse_reply_entry(req, entry)
 end
 
+export unlink
 function unlink(req::FuseReq, parent::FuseIno, name::String)
     ino = find_direntry(parent, name)
     ino <= 0 && return ino
@@ -303,6 +313,7 @@ function unlink(req::FuseReq, parent::FuseIno, name::String)
     return fuse_reply_err(req, 0)
 end
 
+export rename
 function rename(req::FuseReq, parent::FuseIno, name::String, newparent::FuseIno, newname::String, flags::Integer)
 
     if parent == newparent && name == newname
