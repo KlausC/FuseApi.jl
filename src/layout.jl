@@ -252,7 +252,7 @@ function Cserialize!(::Type{T}, src, buf, off, rea::Vector{Int}) where T
     for (poff, F, src) in ctx
         noff = align(noff)
         ensure!(buf, poff, sizeof(Ptr))
-        p = pointer_from_vector(buf) + poff
+        p = pointer(buf) + poff
         q = noff
         Base.unsafe_store!(Ptr{Ptr{F}}(p), Ptr{F}(q))
         noff = Cserialize!(F, src, buf, noff, rea)
@@ -313,7 +313,7 @@ function _Cserialize!(::Type{T}, src, buf::Vector{UInt8}, off::Integer, rea, ctx
     if isbitstype(T)
         s = Base.aligned_sizeof(T)
         ensure!(buf, off, s)
-        p = pointer_from_vector(buf) + off
+        p = pointer(buf) + off
         Base.unsafe_store!(Ptr{T}(p), convert(T, src))
         off + s
     else
@@ -372,7 +372,7 @@ It is essential, that the data area is not changed after this process, that mean
 C-calls.
 """
 function relocate!(buf::AbstractVector, rea::AbstractVector{<:Integer})
-    p0 = pointer_from_vector(buf)
+    p0 = pointer(buf)
     for off in rea
         p = p0 + off
         q = unsafe_load(Ptr{UInt}(p)) + p0

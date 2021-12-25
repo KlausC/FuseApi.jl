@@ -539,7 +539,7 @@ end
 
 function fuse_parse_cmdline(args::CStructAccess{FuseCmdlineArgs})
     opts = Cserialize(FuseCmdlineOpts, ())
-    popts = pointer_from_vector(opts)
+    popts = pointer(opts)
     ccall((:fuse_parse_cmdline, :libfuse3), Cint, (Ptr{FuseCmdlineArgs}, Ptr{UInt8}), args, popts)
     CStructGuarded{FuseCmdlineOpts}(opts)
 end
@@ -552,7 +552,7 @@ end
 
 # Base.unsafe_convert(::Type{Ptr{FuseReq}}, cs::FuseReq) where T = Ptr{FuseReq}(cs.pointer)
 function Base.unsafe_convert(::Type{Ptr{T}}, s::SubArray{T,1}) where T
-    Ptr{T}(pointer_from_vector(s.parent)) + first(s.indices[1]) - 1
+    Ptr{T}(pointer(s.parent)) + first(s.indices[1]) - 1
 end
 
 Base.convert(::Type{Timespec}, t::CStruct{Timespec}) = Timespec(t.seconds, t.nanoseconds)

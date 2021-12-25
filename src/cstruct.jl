@@ -1,6 +1,5 @@
 
 export Caccessor, CStruct, CVector, CStructAccess, CStructGuarded
-export pointer_from_vector
 
 import Base: length, size, pointer, show, unsafe_convert, Fix1
 import Base: propertynames, getproperty, setproperty!, getindex, setindex!
@@ -21,7 +20,7 @@ struct T <: Layout
 end
 
 a = Vector{UInt8}(undef, 100)
-p = pointer_from_vector(a) # usually the data are coming from C
+p = pointer(a) # usually the data are coming from C
 cs = CStruct{T}(p)
 
 cs.a = 1234
@@ -33,8 +32,8 @@ struct CStruct{T} <: CStructAccess{T}
         isbitstype(T) || throw(ArgumentError("$T is not a bitstype"))
         new{T}(p)
     end
-    CStruct{T}(data) where T = CStruct{T}(pointer_from_vector(data))
-    CStruct(data) = CStruct(pointer_from_vector(data))
+    CStruct{T}(data) where T = CStruct{T}(pointer(data))
+    CStruct(data) = CStruct(pointer(data))
     CStruct(p::Ptr{T}) where T = CStruct{T}(p)
 end
 
@@ -209,7 +208,7 @@ unsafe_convert(::Type{Ptr{T}}, cs::CStructAccess{T}) where T = Ptr{T}(pointer(cs
 unsafe_convert(::Type{Ptr{Vector{T}}}, cs::CVector{T}) where T = Ptr{Vector{T}}(pointer(cs))
 
 """
-    p = pointer_from_vector(a::Vector{T})::Ptr{T}
+    p = pointer(a::Vector{T})::Ptr{T}
 
 return pointer to `a[1]`. The existence of the resulting Ptr will not protect the object
 from garbage collection, so you must ensure that the object remains referenced for the whole
@@ -221,4 +220,89 @@ Given `p` it is possible to access arbitrary bits data by byte offset and type `
 This function is mainly used to simulate a C memory in the data
 area of vector `a`.
 """
-pointer_from_vector(a::Vector{T}) where T = unsafe_convert(Ptr{T}, a)
+pointer_from_vector_obs(a::Vector{T}) where T = unsafe_convert(Ptr{T}, a)
+
+
+
+export default_value, default_type, construct
+
+function default_type(::Type{T}) where T
+    isconcretetype(T) || throw(ArgumentError("no default type defined for $T"))
+    T
+end
+default_type(::Type{<:AbstractArray{T,N}}) where {T,N} = Array{T,N}
+default_type(::Type{T}) where T<:Real = isconcretetype(T) ? T : Bool
+default_type(::Type{T}) where T<:AbstractIrrational = isconcretetype(T) ? T : Irrational
+default_type(::Type{T}) where T<:AbstractFloat = isconcretetype(T) ? T : Float64
+default_type(::Type{T}) where T<:Signed = isconcretetype(T) ? T : Int
+default_type(::Type{T}) where T<:Unsigned = isconcretetype(T) ? T : UInt
+default_type(::Type{T}) where T<:Rational = isconcretetype(T) ? T : Rational{default_type(Signed)}
+default_type(::Type{T}) where {S,T<:Rational{S}} = isconcretetype(T) ? T : Rational{default_type(S)}
+default_type(::Type{T}) where T<:Complex = Complex{default_type(Real)}
+default_type(::Type{T}) where {S,T<:Complex{S}} = Complex{default_type(S)}
+default_type(::Type{T}) where T<:AbstractString = isconcretetype(T) ? T : String
+
+default_value(::Type{T}) where T = _default_value(default_type(T))
+default_value(::Type{A}) where {T,N,A<:AbstractArray{T,N}} = default_type(A)(undef,zeros(Int,N)...)
+default_value(::Type{T}) where T<:Number = default_type(T)(0)
+default_value(::Type{T}) where T<:AbstractIrrational = default_type(T)(ℯ)
+default_value(::Type{T}) where {S,T<:Complex{S}} = default_type(T)(default_value(S))
+default_value(::Type{T}) where T<:AbstractString = default_type(T)("")
+
+function _default_value(::Type{T}) where T
+    @assert isconcretetype(T)
+    ft = fieldtypes(T)
+    fv = default_value.(ft)
+    construct(T, fv...)
+end
+
+default_value(::Type{T}, v) where T<:Union{Number,AbstractString} = convert(T, v)
+function default_value(::Type{T}, v) where {S,T<:AbstractArray{S}}
+    convert(T, [default_value(S, x) for x in v])
+end
+function default_value(::Type{T}, v) where T
+    f = fieldnames(T)
+    n = length(f)
+    r = Vector{Any}(undef, n)
+    for i in 1:n
+        fn = fieldname(T, i)
+        ft = fieldtype(T, i)
+        r[i] = hasproperty(v, fn) ? default_value(ft, getproperty(v, fn)) : default_value(ft)
+    end
+    construct(T, r...)
+end
+
+construct(::Type{T}, args...) where T = construct(Val(!ismutabletype(T)), T, args...)
+function construct(::Val{true}, ::Type{T}, args...) where T
+    r = Vector{T}(undef, 1)
+    p = pointer(r)
+    _construct!(T, p, args)
+    r[1]
+end
+function construct(::Val{false}, ::Type{T}, args...) where T
+    r = _construct_any(T)
+    p = pointer_from_objref(r)
+    _construct!(T, p, args)
+    r
+end
+
+function _construct!(::Type{T}, p::Ptr, args) where T
+    n = min(length(args), fieldcount(T))
+    for i = 1:n
+        off = fieldoffset(T, i)
+        ft = fieldtype(T, i)
+        v = convert(ft, args[i])
+        q = p + off
+        if isbitstype(ft)
+            unsafe_store!(Ptr{ft}(q), v)
+        else
+            unsafe_store!(Ptr{Ptr{Nothing}}(q), pointer_from_objref(v))
+        end
+    end
+end
+
+function _construct_any(::Type{T}) where T
+    m = first(methods(T))
+    at = m.sig.types[2:end]
+    T(default_value.(at)...)
+end

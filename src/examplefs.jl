@@ -11,7 +11,7 @@ import Base.Filesystem: S_IWUSR, S_IWGRP, S_IWOTH
 import Base.Filesystem: S_IXUSR, S_IXGRP, S_IXOTH
 import Base.Filesystem: S_ISUID, S_ISGID, S_ISVTX
 
-import Base: UV_ENOENT, UV_ENOTDIR
+import Base: UV_ENOENT, UV_ENOTDIR, UV_ENOTDIR, UV_EEXIST, UV_ENOTEMPTY
 
 const X_UGO = S_IRWXU | S_IRWXG | S_IRWXO
 const X_NOX = X_UGO & ~((S_IXUSR | S_IXGRP | S_IXOTH) & X_UGO)
@@ -353,6 +353,31 @@ function rename(req::FuseReq, parent::FuseIno, name::String, newparent::FuseIno,
         touchdir(dirnew, desnew, T_MTIME | T_CTIME)
     end
     fuse_reply_err(req, 0)
+end
+
+export mkdir
+function mkdir(req::FuseReq, parent::FuseIno, name::String, mode::FuseMode)
+    ctx = fuse_req_ctx(req)
+    uid = ctx.uid
+    gid = ctx.gid
+    umask = ctx.umask
+    mode = mode & X_UGO & ~umask | mode & (S_ISUID | S_ISGID | S_ISVTX) | S_IFDIR
+    do_create(parent, name, mode, uid, gid)
+    entry = do_lookup(req, parent, name)
+    fuse_reply_entry(req, entry)
+end
+
+export rmdir
+function rmdir(req::FuseReq, parent::FuseIno, name::String)
+    ino = find_direntry(parent, name)
+    ino <= 0 && return ino
+    !isempty(get_direntries(ino)) && return UV_ENOTEMPTY
+
+    direntries = get_direntries(parent)
+    deleteat!(direntries, findall(de -> de.name == name, direntries))
+    dir = INODES[parent]
+    touchdir(dir, direntries, T_MTIME | T_CTIME)
+    return fuse_reply_err(req, 0)
 end
 
 # utility functions

@@ -10,7 +10,7 @@ end
 
 @testset "field access" begin
     a = fill(UInt64(0), 3)
-    p = pointer_from_vector(a)
+    p = pointer(a)
     cs = CStruct{A1}(p)
     @test cs.a == 0
     @test cs.b == 0
@@ -32,7 +32,7 @@ end
 
 @testset "index access" begin
     a = fill(UInt64(0), 100)
-    p = pointer_from_vector(a)
+    p = pointer(a)
     cv = CVector{Int}(p, 3)
     @test length(cv) == 3
     cv[1:3] .= (1, 2, 3)
@@ -46,7 +46,7 @@ end
 
 @testset "self-referencing" begin
     a = fill(UInt8(0), 100)
-    p = pointer_from_vector(a)
+    p = pointer(a)
     cs = CStruct{A2}(p)
     @test cs.a === nothing
     io = IOBuffer()
@@ -65,7 +65,7 @@ end
 
 @testset "variable vector at end of struct" begin
     a = fill(Int(0), 1024)
-    p = pointer_from_vector(a)
+    p = pointer(a)
     LEN = 25
     cs = CStruct{A3}(p)
     cs.len = LEN
@@ -80,7 +80,7 @@ end
 
 @testset "pointer to variable vector" begin
     a = fill(Int(0), 1024)
-    p = pointer_from_vector(a)
+    p = pointer(a)
     a[2] = p + 32
     LEN = 25
     cs = CStruct{A4}(p)
@@ -102,4 +102,32 @@ end
     @test length(cs.b) == cs.a == 2
     cs.a = 3
     @test length(cs.b) == cs.a == 3
+end
+
+struct I1
+    a::Int8
+    b::Int16
+    I1() = new(1, 1)
+end
+
+mutable struct M1
+    a::Int8
+    b::Float64
+    M1() = new(2, 2)
+end
+
+struct I2
+    a::Int16
+    b::M1
+    I2() = new(3, M1())
+end
+
+mutable struct M2
+    a::Int16
+    b::M1
+    M2() = new(4, M1())
+end
+
+@testset "construct function $T" for (T, a1, a2) in ((I1, 12, 12), (M1, 12, 12), (I2, 12, M1()), (M2, 12, M1()))
+    @test construct(T, a1, a2) isa T
 end
