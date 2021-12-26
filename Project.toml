@@ -4,6 +4,7 @@ authors = ["KlausC <klausC@users.noreply.github.com> and contributors"]
 version = "0.1.0"
 
 [deps]
+CStructures = "c9817921-aac3-4215-a82e-d746b8a84f94"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 
 [compat]

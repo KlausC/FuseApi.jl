@@ -1,6 +1,8 @@
 module ExampleFs
 using ..FuseApi
 
+using CStructures: CStruct, CStructGuarded, CVector, Cserialize
+
 import Base: open, read, write, unlink, rename, readdir
 
 using Base.Filesystem

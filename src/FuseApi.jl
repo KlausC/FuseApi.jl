@@ -1,7 +1,8 @@
 module FuseApi
 
-include("layout.jl")
-include("cstruct.jl")
+using CStructures: CStruct, CStructGuarded, CVector, CStructAccess, Cserialize
+using CStructures: Layout, LFixedVector, LVarVector, LForwardReference
+
 include("fuseapi.jl")
 include("fusebridge.jl")
 include("examplefs.jl")
