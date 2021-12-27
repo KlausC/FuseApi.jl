@@ -540,4 +540,4 @@ function fuse_session_destroy(se)
     ccall((:fuse_session_destroy, :libfuse3), Cvoid, (Ptr{Nothing},), se)
 end
 
-ptr_to_userdata(u::Ptr) = Base.unsafe_pointer_to_objref(u)
+ptr_to_userdata(u::Ptr) = getindex(Base.unsafe_pointer_to_objref(u))

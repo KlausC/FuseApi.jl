@@ -426,6 +426,11 @@ using Base.Threads
 
 bg() = @spawn main_loop($args, @__MODULE__, "hallo bg user data")
 
-fg() = main_loop(args, @__MODULE__, "hallo fg user data")
+struct C
+    a::Int
+    b::Ref{Any}
+end    
+
+fg() = main_loop(args, @__MODULE__, C(1, "hallo"))
 
 end # module ExampleFs
