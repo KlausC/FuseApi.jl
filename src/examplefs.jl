@@ -84,6 +84,19 @@ function example(parent, name, data=nothing)
     end
 end
 
+# implementatio of calback functions
+
+export init
+function init(userdata::Any, conn::CStruct{FuseConnInfo})
+    println("init userdata = '$userdata'")
+    println("init conninfo = $conn")
+end
+
+export destroy
+function destroy(userdata::Any)
+    println("destroy userdata = '$userdata'")
+end
+
 export lookup
 function lookup(req::FuseReq, parent::FuseIno, name::String)
     entry = do_lookup(req, parent, name)
@@ -411,8 +424,8 @@ args = ["mountpoint", "-d", "-h", "-V", "-f" , "-s", "-o", "clone_fd", "-o", "ma
 
 using Base.Threads
 
-bg() = @spawn main_loop($args, @__MODULE__)
+bg() = @spawn main_loop($args, @__MODULE__, "hallo bg user data")
 
-fg() = main_loop(args, @__MODULE__)
+fg() = main_loop(args, @__MODULE__, "hallo fg user data")
 
 end # module ExampleFs

@@ -1,5 +1,6 @@
 # C- entrypoints for all lowlevel callback functions
 
+export fuse_session_new, fuse_session_destroy, fuse_session_mount, fuse_session_unmount, fuse_session_loop
 export fuse_reply_attr, fuse_reply_bmap, fuse_reply_buf, fuse_reply_create, fuse_reply_data, fuse_reply_entry, fuse_reply_err
 export fuse_reply_ioctl, fuse_reply_ioctl_iov, fuse_reply_ioctl_retry, fuse_reply_iov, fuse_reply_lock, fuse_reply_lseek
 export fuse_reply_attrfuse_reply_none, fuse_reply_open, fuse_reply_poll, fuse_reply_readlink, fuse_reply_statfs, fuse_reply_write, fuse_reply_xattr
@@ -11,7 +12,7 @@ export fuse_req_ctx, fuse_req_getgroups, fuse_req_interrupt_func, fuse_req_inter
 function Ginit(init)
     function Cinit(userdata::Ptr{Nothing}, conn::Ptr{FuseConnInfo})
         docall() do
-            init(userdata, CStruct{FuseConnInfo}(conn))
+            init(ptr_to_userdata(userdata), CStruct{FuseConnInfo}(conn))
         end
     end
     @cfunction $Cinit Cvoid (Ptr{Nothing}, Ptr{FuseConnInfo})
@@ -20,7 +21,7 @@ end
 function Gdestroy(destroy)
     function Cdestroy(userdata::Ptr{Nothing})
         docall() do
-            destroy(userdata)       
+            destroy(ptr_to_userdata(userdata))       
         end
     end
     (@cfunction $Cdestroy Cvoid (Ptr{Nothing},))
@@ -496,10 +497,7 @@ function fuse_req_interrupted(req::FuseReq)
     ccall((:fuse_req_interrupted, :libfuse3), Cint, (FuseReq,), req)
 end
 function fuse_req_userdata(req::FuseReq)
-    ccall((:fuse_req_userdata, :libfuse3), Ptr{Nothing}, (FuseReq,), req)
-end
-function fuse_req_userdata(req::FuseReq, ::Type{T}) where T
-    unsafe_pointer_to_objref(ccall((:fuse_req_userdata, :libfuse3), Ptr{T}, (FuseReq,), req))
+    ptr_to_userdata(ccall((:fuse_req_userdata, :libfuse3), Ptr{Any}, (FuseReq,), req))
 end
 
 # helper function to support readdir
@@ -517,3 +515,29 @@ function fuse_req_ctx(req::FuseReq)
     cdata = ccall((:fuse_req_ctx, :libfuse3), Ptr{FuseCtx}, (FuseReq,), req)
     CStruct(cdata)
 end
+
+# session functions
+
+function fuse_session_new(fargs::CStructAccess{FuseCmdlineArgs}, callbacks::Vector{CFu}, user_data::T) where T
+    ccall((:fuse_session_new, :libfuse3), Ptr{Nothing},
+        (Ptr{FuseCmdlineArgs}, Ptr{CFu}, Cint, Ref{T}),
+        fargs, callbacks, sizeof(callbacks), user_data)
+end
+
+function fuse_session_mount(se, mountpoint)
+    ccall((:fuse_session_mount, :libfuse3), Cint, (Ptr{Nothing}, Cstring), se, mountpoint)
+end
+
+function fuse_session_loop(se)
+    ccall((:fuse_session_loop, :libfuse3), Cint, (Ptr{Nothing},), se)
+end
+
+function fuse_session_unmount(se)
+    ccall((:fuse_session_unmount, :libfuse3), Cvoid, (Ptr{Nothing},), se)
+end
+
+function fuse_session_destroy(se)
+    ccall((:fuse_session_destroy, :libfuse3), Cvoid, (Ptr{Nothing},), se)
+end
+
+ptr_to_userdata(u::Ptr) = Base.unsafe_pointer_to_objref(u)

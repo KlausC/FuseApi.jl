@@ -21,7 +21,7 @@ This package is designed to support the low level operations in Julia.
 
 ### Setup functions
 
-Ther is only one setup function `fuse_main_loop(args, module[, user_data])`, which delivers commandline arguments
+There is only one setup function `fuse_main_loop(args, module[, user_data])`, which delivers commandline arguments
 of the mount process, the name of the implementing module, which defines the callbacks, and an optional user data
 object.
 
@@ -30,7 +30,7 @@ object.
 For each of the (44) callback functions defined by the library, an implementation may be provided as an exported
 function of a separate module (named `MyFileSystem` in this description).
 
-The names and signatures are fixed and can be derived from file [fuse-bridge.jl](https://github.com/KlausC/FuseApi.jl/src/fusebridge.jl).
+The names and signatures are fixed and can be derived from file [fuse-bridge.jl](https://github.com/KlausC/FuseApi.jl/blob/main/src/fusebridge.jl).
 The callback functions shall return 0 after calling one of the fuse_reply functions, or a error number, as accessible by `Base.UV_E...`.
 These error numbers are typically directly passed to the system functions which evoked the callback.
 

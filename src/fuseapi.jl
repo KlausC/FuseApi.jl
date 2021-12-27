@@ -1,7 +1,7 @@
 
 export FuseLowlevelOps, timespec_now, main_loop
 export FUSE_INO_ROOT, RENAME_NOREPLACE, RENAME_EXCHANGE
-export FuseFileInfo, FuseEntryParam, FuseCmdlineArgs, FuseCmdlineOpts, FuseReq, FuseIno, FuseMode
+export FuseConnInfo, FuseFileInfo, FuseEntryParam, FuseCmdlineArgs, FuseCmdlineOpts, FuseReq, FuseIno, FuseMode
 export FuseBufvec, FuseBuf, FuseBufFlags, FuseBufCopyFlags
 export Cstat, Cflock, Timespec
 
@@ -267,10 +267,10 @@ struct FuseConnInfo <: Layout
     max_readahead::Cuint
     capable::Cuint
     want::Cuint
-    max_backgrount::Cuint
+    max_background::Cuint
     congestion_threshold::Cuint
     time_gran::Cuint
-    reserved::LFixedVector{Cuint,22}
+    # reserved::LFixedVector{Cuint,22}
 end
 
 # bit masks for 2nd field of FuseFileInfo
@@ -509,7 +509,7 @@ and the filesystem implementation defined in module `fs`.
 Module `fs` must define and export all supported callback functions, the names
 of which are specified in `FuseLowlevelOps`.
 """
-function main_loop(args::AbstractVector{String}, fs::Module)
+function main_loop(args::AbstractVector{String}, fs::Module, user_data=nothing)
 
     fargs = create_args("command", args)
     opts = fuse_parse_cmdline(fargs)
@@ -517,25 +517,22 @@ function main_loop(args::AbstractVector{String}, fs::Module)
     println("parsed mountpoint $(mountpoint)")
 
     callbacks = filter_ops(fs)
-
-    se = ccall((:fuse_session_new, :libfuse3), Ptr{Nothing},
-        (Ptr{FuseCmdlineArgs}, Ptr{CFu}, Cint, Ptr{Nothing}),
-        fargs, callbacks, sizeof(callbacks), C_NULL)
-
+    se = fuse_session_new(fargs, callbacks, user_data)
     se == C_NULL && throw(ArgumentError("fuse_session_new failed"))
 
     println("going to mount at $(mountpoint)")
-    rc = ccall((:fuse_session_mount, :libfuse3), Cint, (Ptr{Nothing}, Cstring), se, mountpoint)
+    rc = fuse_session_mount(se, mountpoint)
     rc != 0 && throw(ArgumentError("fuse_session_mount failed"))
 
     println("mounted at $(mountpoint) - starting loop")
-    rc = ccall((:fuse_session_loop, :libfuse3), Cint, (Ptr{Nothing},), se)
-    rc != 0 && throw(ArgumentError("fuse_session_loop failed"))
-
-    ccall((:fuse_session_unmount, :libfuse3), Cvoid, (Ptr{Nothing},), se)
-    ccall((:fuse_session_destroy, :libfuse3), Cvoid, (Ptr{Nothing},), se)
+    GC.@preserve user_data begin
+        rc = fuse_session_loop(se)
+        rc != 0 && throw(ArgumentError("fuse_session_loop failed"))
+        println(user_data)
+        fuse_session_unmount(se)
+        fuse_session_destroy(se)
+    end
 end
-
 
 function fuse_parse_cmdline(args::CStructAccess{FuseCmdlineArgs})
     opts = Cserialize(FuseCmdlineOpts, ())
