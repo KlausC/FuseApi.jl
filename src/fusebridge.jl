@@ -117,9 +117,10 @@ function Grmdir(rmdir)
 end
 # F_SYMLINK = 12
 function Gsymlink(symlink)
-    function Csymlink(req::FuseReq, link::String, parent::FuseIno, name::Cstring)
+    function Csymlink(req::FuseReq, link::Cstring, parent::FuseIno, name::Cstring)
         docall(req) do
             name = unsafe_string(name)
+            link = unsafe_string(link)
             symlink(req, link, parent, name)      
         end
     end
@@ -473,8 +474,8 @@ end
 function fuse_reply_poll(req::FuseReq, revents::Integer )
     ccall((:fuse_reply_entry, :libfuse3), Cint, (FuseReq, Cuint), req, revents)
 end
-function fuse_reply_readlink(req::FuseReq, link::String)
-    ccall((:fuse_reply_readlink, :libfuse3), Cint, (FuseReq, Cstring), req, link)
+function fuse_reply_readlink(req::FuseReq, link::Vector{UInt8})
+    ccall((:fuse_reply_readlink, :libfuse3), Cint, (FuseReq, Ptr{UInt8}), req, link)
 end
 function fuse_reply_statfs(req::FuseReq, stbuf::CStructAccess{Cstatvfs})
     ccall((:fuse_reply_statfs, :libfuse3), Cint, (FuseReq, Ptr{Cstatvfs}), req, stbuf)

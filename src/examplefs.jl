@@ -13,13 +13,15 @@ import Base.Filesystem: S_IWUSR, S_IWGRP, S_IWOTH
 import Base.Filesystem: S_IXUSR, S_IXGRP, S_IXOTH
 import Base.Filesystem: S_ISUID, S_ISGID, S_ISVTX
 
-import Base: UV_ENOENT, UV_ENOTDIR, UV_ENOTDIR, UV_EEXIST, UV_ENOTEMPTY
+import Base: UV_ENOENT, UV_ENOTDIR, UV_ENOTDIR, UV_EEXIST, UV_ENOTEMPTY, UV_ENAMETOOLONG
 
 const X_UGO = S_IRWXU | S_IRWXG | S_IRWXO
 const X_NOX = X_UGO & ~((S_IXUSR | S_IXGRP | S_IXOTH) & X_UGO)
 
 const DIR1 = "."
 const DIR2 = ".."
+
+const PATH_MAX = 4096
 
 const DEFAULT_MODE = S_IFREG | X_UGO
 
@@ -330,7 +332,7 @@ end
 
 export rename
 function rename(req::FuseReq, parent::FuseIno, name::String, newparent::FuseIno, newname::String, flags::Integer)
-
+    # println("rename($parent/$name => $newparent/$newname)")
     if parent == newparent && name == newname
         return fuse_reply_err(req, 0)
     end
@@ -352,14 +354,14 @@ function rename(req::FuseReq, parent::FuseIno, name::String, newparent::FuseIno,
         des[k] = Direntry(de.ino, den.name)
         desnew[knew] = Direntry(den.ino, de.name)
     else
-        if knew != 0 # && flags != RENAME_NOREPLACE 
-            deleteat!(desnew, knew)
-        end
         if parent == newparent
             des[k] = Direntry(de.ino, newname)
         else
             push!(desnew, name == newname ? des[k] : Direntry(de.ino, newname))
             deleteat!(des, k)
+        end
+        if knew != 0 # && flags != RENAME_NOREPLACE 
+            deleteat!(desnew, knew)
         end
     end
 
@@ -395,6 +397,28 @@ function rmdir(req::FuseReq, parent::FuseIno, name::String)
     return fuse_reply_err(req, 0)
 end
 
+export symlink
+function symlink(req::FuseReq, link::String, parent::FuseIno, name::String)
+    # println("symlink($parent/$name => $link)")
+    n = length(link)
+    0 < n < PATH_MAX || return UV_ENAMETOOLONG
+    ctx = fuse_req_ctx(req)
+    uid = ctx.uid
+    gid = ctx.gid
+    mode = X_UGO | S_IFLNK
+    inode = do_create(parent, name, mode, uid, gid)
+    inode.size = n
+    vlink = collect(codeunits(link))
+    DATA[inode.ino] = push!(vlink, 0x00)
+    entry = do_lookup(req, parent, name)
+    fuse_reply_entry(req, entry)
+end
+
+export readlink
+function readlink(req::FuseReq, ino::FuseIno)
+    link = DATA[ino]
+    fuse_reply_readlink(req, link)
+end
 # utility functions
 get_direntries(ino::Integer) = get(DIR_DATA, ino) do; Direntry[] end
 get_direntries!(ino::Integer) = get!(DIR_DATA, ino) do; Direntry[] end
