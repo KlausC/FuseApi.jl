@@ -1,4 +1,5 @@
 using Dates: DateTime, now, UTC
+using CStructures: default_value
 
 export timespec_now, main_loop
 
@@ -100,6 +101,11 @@ function docall(f::Function)
     nothing
 end
 
+"""
+    create_args(cmd::String, args::AbstractVector{String})
+
+Return CStructGuarded{FuseCmdlineArgs} object to pass arguments to C. 
+"""
 function create_args(cmd::String, arg::AbstractVector{String})
     data = Cserialize(FuseCmdlineArgs, (argc = length(arg) + 1, argv = [cmd, arg..., nothing]))
     CStructGuarded{FuseCmdlineArgs}(data)
@@ -115,33 +121,35 @@ Module `fs` must define and export all supported callback functions, the names
 of which are specified in `FuseLowlevelOps`.
 """
 function main_loop(args::AbstractVector{String}, fs::Module, user_data=nothing)
-
+    user_data_r = Ref(user_data)
+    GC.@preserve user_data_r _main_loop(args, fs, user_data)
+end
+function _main_loop(args, fs, user_data)
         fargs = create_args("command", args)
         opts = fuse_parse_cmdline(fargs)
-        mountpoint = opts.mountpoint
-        println("parsed mountpoint $(mountpoint)")
-
         callbacks = filter_ops(fs)
         se = fuse_session_new(fargs, callbacks, user_data)
-        se == C_NULL && throw(ArgumentError("fuse_session_new failed"))
+        se == C_NULL && throw(ArgumentError("fuse_session_new failed $rc"))
+        rc = fuse_session_mount(se, opts.mountpoint)
+        rc != 0 && throw(ArgumentError("fuse_session_mount failed $rc"))
 
-        println("going to mount at $(mountpoint)")
-        rc = fuse_session_mount(se, mountpoint)
-        rc != 0 && throw(ArgumentError("fuse_session_mount failed"))
-
-        println("mounted at $(mountpoint) - starting loop")
-        rc = fuse_session_loop(se)
-        rc != 0 && throw(ArgumentError("fuse_session_loop failed"))
-
+        cfg = FuseLoopConfig(opts.clone_fd, opts.max_idle_threads)
+        rc = opts.singlethread ? fuse_session_loop(se) : fuse_session_loop_mt(se, cfg)
+        rc != 0 && throw(ArgumentError("fuse_session_loop failed $rc"))
         fuse_session_unmount(se)
-        GC.@preserve user_data fuse_session_destroy(se)
+        fuse_session_destroy(se)
 end
 
+"""
+    fuse_parse_cmdline(args::CStructAccess{FuseCmdlineArgs})
+
+Return FuseCmdlineOpts object with selected options and mountpoint from the cmdline.
+"""
 function fuse_parse_cmdline(args::CStructAccess{FuseCmdlineArgs})
-    opts = Cserialize(FuseCmdlineOpts, ())
+    opts = Cserialize(LFuseCmdlineOpts, ())
     popts = pointer(opts)
     ccall((:fuse_parse_cmdline, :libfuse3), Cint, (Ptr{FuseCmdlineArgs}, Ptr{UInt8}), args, popts)
-    CStructGuarded{FuseCmdlineOpts}(opts)
+    default_value(FuseCmdlineOpts, CStruct{LFuseCmdlineOpts}(opts))
 end
 
 function log(args...)

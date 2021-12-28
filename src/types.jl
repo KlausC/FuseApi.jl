@@ -17,7 +17,7 @@ Layout template as input for `fuse_session_loop_mt`.
 
 Named `struct fuse_loop_config` in `libfuse3`.
 """
-struct FuseLoopConfig <: Layout
+mutable struct FuseLoopConfig
     clone_fd::Cint
     max_idle_threads::Cuint
 end
@@ -48,7 +48,7 @@ Has to be allocated by Julia caller, by `CStructGuarded{FuseCmdlineOpts}`.
 Field `mountpoint` has to be copied immediately ofter the call, because
 the `*char` pointer stored in there is unsafe.
 """
-struct FuseCmdlineOpts <: Layout
+struct LFuseCmdlineOpts <: Layout
     singlethread::Cint
     foreground::Cint
     debug::Cint
@@ -58,6 +58,17 @@ struct FuseCmdlineOpts <: Layout
     show_help::Cint
     clone_fd::Cint
     max_idle_threads::Cuint
+end
+struct FuseCmdlineOpts
+    singlethread::Bool
+    foreground::Bool
+    debug::Bool
+    show_version::Bool
+    show_help::Bool
+    clone_fd::Bool
+    nodefault_subtype::Int
+    mountpoint::String
+    max_idle_threads::Int
 end
 
 """

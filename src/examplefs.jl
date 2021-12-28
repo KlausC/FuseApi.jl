@@ -420,13 +420,13 @@ end
 
 example(1, "xxx", codeunits("hello world 4711!\n"))
 
-args = ["mountpoint", "-d", "-h", "-V", "-f" , "-s", "-o", "clone_fd", "-o", "max_idle_threads=5"]
+args = ["mountpoint", "-s", "-d", "-h", "-V", "-f" , "-o", "clone_fd", "-o", "max_idle_threads=5"]
 
 using Base.Threads
 
 bg() = @spawn main_loop($args, @__MODULE__, "hallo bg user data")
 
-struct C
+mutable struct C
     a::Int
     b::Ref{Any}
 end    

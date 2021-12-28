@@ -521,7 +521,7 @@ end
 function fuse_session_new(fargs::CStructAccess{FuseCmdlineArgs}, callbacks::Vector{CFu}, user_data::T) where T
     ccall((:fuse_session_new, :libfuse3), Ptr{Nothing},
         (Ptr{FuseCmdlineArgs}, Ptr{CFu}, Cint, Ref{T}),
-        fargs, callbacks, sizeof(callbacks), user_data)
+        fargs, callbacks, sizeof(callbacks), Ref(user_data))
 end
 
 function fuse_session_mount(se, mountpoint)
@@ -532,6 +532,10 @@ function fuse_session_loop(se)
     ccall((:fuse_session_loop, :libfuse3), Cint, (Ptr{Nothing},), se)
 end
 
+function fuse_session_loop_mt(se, cfg::FuseLoopConfig)
+    ccall((:fuse_session_loop_mt, :libfuse3), Cint, (Ptr{Nothing}, Ref{FuseLoopConfig}), se, cfg)
+end
+
 function fuse_session_unmount(se)
     ccall((:fuse_session_unmount, :libfuse3), Cvoid, (Ptr{Nothing},), se)
 end
@@ -540,4 +544,8 @@ function fuse_session_destroy(se)
     ccall((:fuse_session_destroy, :libfuse3), Cvoid, (Ptr{Nothing},), se)
 end
 
-ptr_to_userdata(u::Ptr) = getindex(Base.unsafe_pointer_to_objref(u))
+function ptr_to_userdata(u::Ptr)
+    println("ptr_to_userdata($u)")
+    ud = Base.unsafe_pointer_to_objref(u)
+    ud isa Ref ? getindex(ud) : ud
+end
