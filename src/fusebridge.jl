@@ -248,14 +248,14 @@ function Gstatfs(statfs)
 end
 # F_SETXATTR = 26
 function Gsetxattr(setxattr)
-    function Csetxattr(req::FuseReq, ino::FuseIno, name::Cstring, value::Cstring, size::Csize_t, flags::Cint)
+    function Csetxattr(req::FuseReq, ino::FuseIno, name::Cstring, value::Ptr{UInt8}, size::Csize_t, flags::Cint)
         docall(req) do          
             name = unsafe_string(name)
-            value = unsafe_string(value)
-            setxattr(req, ino, name, value, size, flags)     
+            value = copy(unsafe_wrap(Array, value, size))
+            setxattr(req, ino, name, value, flags)     
         end
     end
-    (@cfunction $Csetxattr Cvoid (FuseReq, FuseIno, Cstring, Cstring, Csize_t, Cint))
+    (@cfunction $Csetxattr Cvoid (FuseReq, FuseIno, Cstring, Ptr{UInt8}, Csize_t, Cint))
 end
 # F_GETXATTR = 27
 function Ggetxattr(getxattr)
@@ -285,6 +285,7 @@ function Gremovexattr(removexattr)
         end
     end
     (@cfunction $Cremovexattr Cvoid (FuseReq, FuseIno, Cstring))
+end
 # F_ACCESS = 30
 function Gaccess(access)
     function Caccess(req::FuseReq, ino::FuseIno, mask::Cint)
@@ -293,7 +294,6 @@ function Gaccess(access)
         end
     end
     (@cfunction $Caccess Cvoid (FuseReq, FuseIno, Cint))
-end
 end
 # F_CREATE = 31
 function Gcreate(create)
@@ -433,7 +433,7 @@ function fuse_reply_bmap(req::FuseReq, idx::Integer)
     ccall((:fuse_reply_bmap, :libfuse3), Cint, (FuseReq, UInt64), req, idx)
 end
 function fuse_reply_buf(req::FuseReq, buf::Vector{UInt8}, size::Integer)
-    ccall((:fuse_reply_buf, :libfuse3), Cint, (FuseReq, Ptr{UInt8}, Csize_t), req, buf, size)
+    ccall((:fuse_reply_buf, :libfuse3), Cint, (FuseReq, Ptr{UInt8}, Csize_t), req, pointer(buf), size)
 end
 function fuse_reply_create(req::FuseReq, e::CStructAccess{FuseEntryParam}, fi::CStruct{FuseFileInfo})
     ccall((:fuse_reply_create, :libfuse3), Cint, (FuseReq, Ptr{FuseEntryParam}, Ptr{FuseFileInfo}), req, e, fi)

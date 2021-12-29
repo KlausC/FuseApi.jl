@@ -1,6 +1,6 @@
 
 export FuseLowlevelOps
-export FUSE_INO_ROOT, RENAME_NOREPLACE, RENAME_EXCHANGE
+export FUSE_INO_ROOT, RENAME_NOREPLACE, RENAME_EXCHANGE, XATTR_CREATE, XATTR_REPLACE
 export FuseConnInfo, FuseFileInfo, FuseEntryParam, FuseCmdlineArgs, FuseCmdlineOpts, FuseReq, FuseIno, FuseMode
 export FuseBufvec, FuseBuf, FuseBufFlags, FuseBufCopyFlags
 export Cstat, Cflock, Timespec
@@ -404,3 +404,7 @@ const FUSE_IOCTL_MAX_IOV = 256
 # for replace function
 const RENAME_NOREPLACE = (1 << 0)
 const RENAME_EXCHANGE = (1 << 1)
+
+# for setxattr function
+const XATTR_CREATE = 1
+const XATTR_REPLACE = 2

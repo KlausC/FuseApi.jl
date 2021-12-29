@@ -13,7 +13,8 @@ import Base.Filesystem: S_IWUSR, S_IWGRP, S_IWOTH
 import Base.Filesystem: S_IXUSR, S_IXGRP, S_IXOTH
 import Base.Filesystem: S_ISUID, S_ISGID, S_ISVTX
 
-import Base: UV_ENOENT, UV_ENOTDIR, UV_ENOTDIR, UV_EEXIST, UV_ENOTEMPTY, UV_ENAMETOOLONG
+import Base: UV_ENOENT, UV_ENOTDIR, UV_EEXIST, UV_ENOTEMPTY, UV_ENAMETOOLONG, UV_ERANGE
+const UV_ENODATA = -61 # missing in Base
 
 const X_UGO = S_IRWXU | S_IRWXG | S_IRWXO
 const X_NOX = X_UGO & ~((S_IXUSR | S_IXGRP | S_IXOTH) & X_UGO)
@@ -76,6 +77,7 @@ const ROOT = Inode(FUSE_INO_ROOT, S_IFDIR | X_UGO, 1, 0, 0, 0)
 const INODES = Dict{FuseIno, Inode}(FUSE_INO_ROOT => ROOT)
 const DATA = Dict{FuseIno, Vector{UInt8}}()
 const DIR_DATA = Dict{FuseIno, Vector{Direntry}}()
+const XATTR = Dict{FuseIno, Vector{Tuple{String,Vector{UInt8}}}}()
 
 function example(parent, name, data=nothing)
     file = do_create(parent, name, S_IFREG | X_UGO, 0, 0)
@@ -86,7 +88,15 @@ function example(parent, name, data=nothing)
     end
 end
 
-# implementatio of calback functions
+function destroy_ino!(ino::FuseIno)
+    delete!(INODES, ino)
+    delete!(DATA, ino)
+    delete!(DIR_DATA, ino)
+    delete!(XATTR, ino)
+    nothing
+end
+
+# implementation of callback functions
 
 export init
 function init(userdata::Any, conn::CStruct{FuseConnInfo})
@@ -323,7 +333,7 @@ function unlink(req::FuseReq, parent::FuseIno, name::String)
     inode = INODES[ino]
     inode.nlink -= 1
     if inode.nlink <= 0
-        delete!(INODES, ino)
+        destroy_ino!(ino)
     else
         touch(inode, T_CTIME)
     end
@@ -419,6 +429,64 @@ function readlink(req::FuseReq, ino::FuseIno)
     link = DATA[ino]
     fuse_reply_readlink(req, link)
 end
+
+export setxattr
+function setxattr(req::FuseReq, ino::FuseIno, name::String, value::Vector{UInt8}, flags::Integer)
+    vec = get(XATTR, ino) do; emptyxvec() end
+    k = findfirst(x->x[1] == name, vec)
+    hk = k === nothing
+    flags == XATTR_CREATE && hk && return UV_EEXIST
+    flags == XATTR_REPLACE && !hk && return UV_ENODATA
+    if k === nothing
+        XATTR[ino] = push!(vec, (name, value))
+    else
+        vec[k] = (name, value)
+    end
+    fuse_reply_err(req, 0)
+end
+
+export getxattr
+function getxattr(req::FuseReq, ino::FuseIno, name::String, size::Integer)
+    vec = get(XATTR, ino) do; emptyxvec() end
+    k = findfirst(x->x[1] == name, vec)
+    k === nothing && return UV_ENODATA
+    val = vec[k][2]
+    println("getxattr($name) = $val")
+    bsize = sizeof(val)
+    if size == 0
+        fuse_reply_xattr(req, bsize)
+    else
+        bsize > size && return UV_ERANGE
+        fuse_reply_buf(req, val, bsize)
+    end
+end
+
+export removexattr
+function removexattr(req::FuseReq, ino::FuseIno, name::String)
+    vec = get(XATTR, ino) do; emptyxvec() end
+    k = findfirst(x->x[1] == name, vec)
+    if k !== nothing
+        deleteat!(vec, k)
+    end
+    fuse_reply_err(req, 0)
+end
+
+export listxattr
+function listxattr(req::FuseReq, ino::FuseIno, size::Integer)
+    str = join([t[1] for t in get(XATTR, ino) do; emptyxvec() end], '\0')
+    val = collect(codeunits(str))
+    !isempty(val) && push!(val, 0x0)
+    println("listxattr($ino, $size); val = $val")
+    bsize = sizeof(val)
+    if size == 0
+        fuse_reply_xattr(req, bsize)
+    else
+        bsize > size && return UV_ERANGE
+        fuse_reply_buf(req, val, bsize)
+    end
+end
+
+
 # utility functions
 get_direntries(ino::Integer) = get(DIR_DATA, ino) do; Direntry[] end
 get_direntries!(ino::Integer) = get!(DIR_DATA, ino) do; Direntry[] end
@@ -427,6 +495,7 @@ function touchdir(dir::Inode, direntries, mode)
     dir.size = length(direntries)
     touch(dir, mode)
 end
+emptyxvec() = Tuple{String,Vector{UInt8}}[]
 
 function Base.touch(inode::Inode, mode::UInt16)
     t = timespec_now()
