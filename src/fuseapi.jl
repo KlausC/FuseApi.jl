@@ -20,11 +20,11 @@ as defined in `FuseApi.FuseLowlevelOps`.
 For functions, which are not exported by `module`, a null pointer is generated
 to indicate to `fuselib3`, that this function is not supported.
 """
-function filter_ops(fs::Module)
+function filter_ops(mod::Module, fs)
     res = fill(C_NULL, length(fieldnames(FuseLowlevelOps)))
     for (i, f) in enumerate(fieldnames(FuseLowlevelOps))
-        if (c = getp(fs, f, noop)) != noop
-            res[i] = gen_callback(f, c)
+        if (c = getp(mod, f, noop)) != noop
+            res[i] = gen_callback(f, c, fs)
         end     
     end
     res
@@ -49,19 +49,20 @@ function getp(m, f::Symbol, default::Function)
 end
 
 """
-    gen_callback(n::Symbol, f::Function)
+    gen_callback(name::Symbol, f::Function, fs::Any)
 
-Call the function named `Symbol('G', n)` (for example `Gread`), which
+Call the function named `Symbol('G', name)` (for example `Gread`), which
 generates a C-callable closure of type `CFunction`, dedicated to call back the Julia
-function `f` (for example `read`).
+function `f(fs, ...)` (for example `read(fs, req, ...)`).
 
 Return the pointer of `CFunction`, which can be passed as a C-callback to `ccall`
 activations.
 """
-function gen_callback(f::Symbol, c::Function)
-    gf = Symbol('G', f)
+function gen_callback(name::Symbol, c::Function, fs::Any)
+    gf = Symbol('G', name)
     gfunction = getproperty(FuseApi, gf)
-    gfunction(c).ptr
+    g = gfunction(c, fs)
+    Base.unsafe_convert(Ptr{Cvoid}, Base.cconvert(Ptr{Cvoid}, g))
 end
 
 """
@@ -74,12 +75,16 @@ An error reply is returned.
 function docall(f::Function, req::FuseReq)
     error = Base.UV_ENOTSUP
     try
+        println("docall($f, $req)")
+        if req.pointer === C_NULL
+            throw(ArgumentError("docall($f, $req) - req was zero!!!"))
+        end
         error = f()
     catch
         error = Base.UV_EACCES
         rethrow()
     finally
-        if error != 0
+        if error != 0 && req.pointer !== C_NULL
             fuse_reply_err(req, abs(error))
         end
         nothing
@@ -127,8 +132,9 @@ end
 function _main_loop(args, fs, user_data)
         fargs = create_args("command", args)
         opts = fuse_parse_cmdline(fargs)
-        callbacks = filter_ops(fs)
-        se = fuse_session_new(fargs, callbacks, user_data)
+        callbacks = filter_ops(fs, user_data)
+        copycb = copy(callbacks)
+        se = fuse_session_new(fargs, callbacks)
         se == C_NULL && throw(ArgumentError("fuse_session_new failed $rc"))
         rc = fuse_session_mount(se, opts.mountpoint)
         rc != 0 && throw(ArgumentError("fuse_session_mount failed $rc"))
@@ -136,8 +142,13 @@ function _main_loop(args, fs, user_data)
         cfg = FuseLoopConfig(opts.clone_fd, opts.max_idle_threads)
         rc = opts.singlethread ? fuse_session_loop(se) : fuse_session_loop_mt(se, cfg)
         rc != 0 && throw(ArgumentError("fuse_session_loop failed $rc"))
+        check_callbacks(callbacks, copycb)
         fuse_session_unmount(se)
         fuse_session_destroy(se)
+end
+
+function check_callbacks(a, b)
+    a == b
 end
 
 """

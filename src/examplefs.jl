@@ -110,7 +110,7 @@ function destroy(userdata::Any)
 end
 
 export lookup
-function lookup(req::FuseReq, parent::FuseIno, name::String)
+function lookup(fs::Any, req::FuseReq, parent::FuseIno, name::String)
     entry = do_lookup(req, parent, name)
     entry isa Number ? entry : fuse_reply_entry(req, entry)
 end
@@ -140,8 +140,13 @@ function do_lookup(req::FuseReq, parent::FuseIno, name::String)
     entry
 end
 
+export forget
+function forget(fs::Any, req::FuseReq, ino::FuseIno, count::Integer)
+    fuse_reply_none(req)
+end
+
 export getattr
-function getattr(req::FuseReq, ino::FuseIno, ::CStruct{FuseFileInfo})
+function getattr(fs::Any, req::FuseReq, ino::FuseIno, ::CStruct{FuseFileInfo})
     haskey(INODES, ino) || return UV_ENOENT
     en = INODES[ino]
     attr = status(en)
@@ -150,7 +155,7 @@ function getattr(req::FuseReq, ino::FuseIno, ::CStruct{FuseFileInfo})
 end
 
 export setattr
-function setattr(req::FuseReq, ino::FuseIno, st::CStruct{Cstat}, to_set::Integer, fi::CStruct{FuseFileInfo})
+function setattr(fs::Any, req::FuseReq, ino::FuseIno, st::CStruct{Cstat}, to_set::Integer, fi::CStruct{FuseFileInfo})
     haskey(INODES, ino) || return UV_ENOENT
     inode = INODES[ino]
     resetsuid = false
@@ -189,21 +194,21 @@ function setattr(req::FuseReq, ino::FuseIno, st::CStruct{Cstat}, to_set::Integer
     if resetsuid
         inode.mode &= ~(S_ISUID | S_ISGID)
     end
-    getattr(req, ino, fi)
+    getattr(fs, req, ino, fi)
 end
 
 export opendir
-function opendir(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
+function opendir(fs::Any, req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
     fuse_reply_open(req, fi)
 end
 
 export releasedir
-function releasedir(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
+function releasedir(fs::Any, req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
     fuse_reply_err(req, 0)
 end
 
 export readdir
-function readdir(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
+function readdir(fs::Any, req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
     buf = Vector{UInt8}(undef, size)
     dir = INODES[ino]
     is_directory(dir) || return UV_ENOTDIR
@@ -249,7 +254,7 @@ function do_create(parent::Integer, name::String, mode::Integer, uid::Integer, g
 end
 
 export create
-function create(req::FuseReq, parent::FuseIno, name::String, mode::FuseMode, fi::CStruct{FuseFileInfo})
+function create(fs::Any, req::FuseReq, parent::FuseIno, name::String, mode::FuseMode, fi::CStruct{FuseFileInfo})
     ctx = fuse_req_ctx(req)
     uid = ctx.uid
     gid = ctx.gid
@@ -261,7 +266,7 @@ function create(req::FuseReq, parent::FuseIno, name::String, mode::FuseMode, fi:
 end
 
 export open
-function open(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
+function open(fs::Any, req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
     inode = INODES[ino]
     if is_regular(inode) && fi.flags & JL_O_TRUNC != 0
         inode.size = 0
@@ -271,7 +276,7 @@ function open(req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
 end
 
 export read
-function read(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
+function read(fs::Any, req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
     haskey(INODES, ino) || return UV_ENOENT
     inode = INODES[ino]
     is_directory(inode) && return UV_ENOENT
@@ -285,7 +290,7 @@ function read(req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStruct
 end
 
 export write
-function write(req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
+function write(fs::Any, req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
     inode = INODES[ino]
     is_directory(inode) && return UV_ENOENT
     data = get!(DATA, ino, UInt8[])
@@ -308,7 +313,7 @@ function write(req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, 
 end
 
 export link
-function link(req::FuseReq, ino::FuseIno, newparent::FuseIno, name::String)
+function link(fs::Any, req::FuseReq, ino::FuseIno, newparent::FuseIno, name::String)
     inode = INODES[ino]
     is_directory(inode) && return UV_EPERM
     dir = INODES[newparent]
@@ -323,7 +328,7 @@ function link(req::FuseReq, ino::FuseIno, newparent::FuseIno, name::String)
 end
 
 export unlink
-function unlink(req::FuseReq, parent::FuseIno, name::String)
+function unlink(fs::Any, req::FuseReq, parent::FuseIno, name::String)
     ino = find_direntry(parent, name)
     ino <= 0 && return ino
     direntries = get_direntries(parent)
@@ -341,7 +346,7 @@ function unlink(req::FuseReq, parent::FuseIno, name::String)
 end
 
 export rename
-function rename(req::FuseReq, parent::FuseIno, name::String, newparent::FuseIno, newname::String, flags::Integer)
+function rename(fs::Any, req::FuseReq, parent::FuseIno, name::String, newparent::FuseIno, newname::String, flags::Integer)
     # println("rename($parent/$name => $newparent/$newname)")
     if parent == newparent && name == newname
         return fuse_reply_err(req, 0)
@@ -383,7 +388,7 @@ function rename(req::FuseReq, parent::FuseIno, name::String, newparent::FuseIno,
 end
 
 export mkdir
-function mkdir(req::FuseReq, parent::FuseIno, name::String, mode::FuseMode)
+function mkdir(fs::Any, req::FuseReq, parent::FuseIno, name::String, mode::FuseMode)
     ctx = fuse_req_ctx(req)
     uid = ctx.uid
     gid = ctx.gid
@@ -395,7 +400,7 @@ function mkdir(req::FuseReq, parent::FuseIno, name::String, mode::FuseMode)
 end
 
 export rmdir
-function rmdir(req::FuseReq, parent::FuseIno, name::String)
+function rmdir(fs::Any, req::FuseReq, parent::FuseIno, name::String)
     ino = find_direntry(parent, name)
     ino <= 0 && return ino
     !isempty(get_direntries(ino)) && return UV_ENOTEMPTY
@@ -408,7 +413,7 @@ function rmdir(req::FuseReq, parent::FuseIno, name::String)
 end
 
 export symlink
-function symlink(req::FuseReq, link::String, parent::FuseIno, name::String)
+function symlink(fs::Any, req::FuseReq, link::String, parent::FuseIno, name::String)
     # println("symlink($parent/$name => $link)")
     n = length(link)
     0 < n < PATH_MAX || return UV_ENAMETOOLONG
@@ -425,13 +430,13 @@ function symlink(req::FuseReq, link::String, parent::FuseIno, name::String)
 end
 
 export readlink
-function readlink(req::FuseReq, ino::FuseIno)
+function readlink(fs::Any, req::FuseReq, ino::FuseIno)
     link = DATA[ino]
     fuse_reply_readlink(req, link)
 end
 
-export setxattr
-function setxattr(req::FuseReq, ino::FuseIno, name::String, value::Vector{UInt8}, flags::Integer)
+#export setxattr
+function setxattr(fs::Any, req::FuseReq, ino::FuseIno, name::String, value::Vector{UInt8}, flags::Integer)
     vec = get(XATTR, ino) do; emptyxvec() end
     k = findfirst(x->x[1] == name, vec)
     hk = k === nothing
@@ -445,8 +450,8 @@ function setxattr(req::FuseReq, ino::FuseIno, name::String, value::Vector{UInt8}
     fuse_reply_err(req, 0)
 end
 
-export getxattr
-function getxattr(req::FuseReq, ino::FuseIno, name::String, size::Integer)
+#export getxattr
+function getxattr(fs::Any, req::FuseReq, ino::FuseIno, name::String, size::Integer)
     vec = get(XATTR, ino) do; emptyxvec() end
     k = findfirst(x->x[1] == name, vec)
     k === nothing && return UV_ENODATA
@@ -461,8 +466,8 @@ function getxattr(req::FuseReq, ino::FuseIno, name::String, size::Integer)
     end
 end
 
-export removexattr
-function removexattr(req::FuseReq, ino::FuseIno, name::String)
+#export removexattr
+function removexattr(fs::Any, req::FuseReq, ino::FuseIno, name::String)
     vec = get(XATTR, ino) do; emptyxvec() end
     k = findfirst(x->x[1] == name, vec)
     if k !== nothing
@@ -471,8 +476,8 @@ function removexattr(req::FuseReq, ino::FuseIno, name::String)
     fuse_reply_err(req, 0)
 end
 
-export listxattr
-function listxattr(req::FuseReq, ino::FuseIno, size::Integer)
+#export listxattr
+function listxattr(fs::Any, req::FuseReq, ino::FuseIno, size::Integer)
     str = join([t[1] for t in get(XATTR, ino) do; emptyxvec() end], '\0')
     val = collect(codeunits(str))
     !isempty(val) && push!(val, 0x0)
@@ -524,6 +529,6 @@ mutable struct C
     b::Ref{Any}
 end    
 
-fg() = main_loop(args, @__MODULE__, C(1, "hallo"))
+fg() = main_loop(args, @__MODULE__, nothing)
 
 end # module ExampleFs
