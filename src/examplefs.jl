@@ -54,6 +54,46 @@ end
 is_directory(inode::Inode) = inode.mode & S_IFMT == S_IFDIR
 is_regular(inode::Inode) = inode.mode & S_IFMT == S_IFREG
 
+struct FilesystemData
+    inodes::Dict{FuseIno, Inode}
+    data::Dict{FuseIno, Vector{UInt8}}
+    data_dir::Dict{FuseIno, Vector{Direntry}}
+    xattr::Dict{FuseIno, Vector{Tuple{String,Vector{UInt8}}}}
+    FilesystemData(root) = new(Dict(FUSE_INO_ROOT => root), Dict(), Dict(), Dict())
+end
+
+get_inode(fs::FilesystemData, ino::FuseIno) = get(fs.inodes, ino, nothing)
+has_inode(fs::FilesystemData, ino::FuseIno) = haskey(fs.inodes, ino)
+next_ino(fs::FilesystemData) = maximum(keys(fs.inodes)) + 1
+push_inode!(fs::FilesystemData, inode::Pair{FuseIno,Inode}) = push!(fs.inodes, inode)
+
+get_data(fs::FilesystemData, ino::FuseIno) = get(fs.data, ino) do; UInt8[] end
+get_data!(fs::FilesystemData, ino::FuseIno) = get!(fs.data, ino) do; UInt8[] end
+set_data!(fs::FilesystemData, ino::FuseIno, v) = setindex!(fs.data, ino, v)
+has_data(fs::FilesystemData, ino::FuseIno) = haskey(fs.data, ino)
+push_data!(fs::FilesystemData, inode::Pair{FuseIno}) = push!(fs.data, inode)
+delete_data!(fs::FilesystemData, inode::Pair{FuseIno}) = delete!(fs.data, inode)
+
+function lookup_ino(fs::FilesystemData, parent::Integer, name::AbstractString)
+    haskey(fs.data_dir, parent) || return 0
+    direntries = fs.data_dir[parent]
+    k = findfirst(de -> de.name == name, direntries)
+    k === nothing ? 0 : direntries[k].ino
+end
+get_direntries(fs::FilesystemData, ino::Integer) = get(fs.data_dir, ino) do; Direntry[] end
+get_direntries!(fs::FilesystemData, ino::Integer) = get!(fs.data_dir, ino) do; Direntry[] end
+
+get_xattr(fs::FilesystemData, ino::Integer) = get(fs.xattr, ino) do; emptyxvec() end
+set_xattr!(fs::FilesystemData, ino::Integer, vec) = fs.xattr[ino] = vec
+
+function destroy_ino!(fs::FilesystemData, ino::FuseIno)
+    delete!(fs.inodes, ino)
+    delete!(fs.data, ino)
+    delete!(fs.data_dir, ino)
+    delete!(fs.xattr, ino)
+    nothing
+end
+
 
 function status(inode::Inode)
     st = CStructGuarded(Cstat)
@@ -68,32 +108,17 @@ function status(inode::Inode)
     st.ctime = inode.ctime
     st
 end
-
-function status(ino::FuseIno)
-    status(get(INODES, ino, nothing))
+function status(fs::FilesystemData, ino::FuseIno)
+    status(get_inode(fs, ino))
 end
 
-const ROOT = Inode(FUSE_INO_ROOT, S_IFDIR | X_UGO, 1, 0, 0, 0)
-const INODES = Dict{FuseIno, Inode}(FUSE_INO_ROOT => ROOT)
-const DATA = Dict{FuseIno, Vector{UInt8}}()
-const DIR_DATA = Dict{FuseIno, Vector{Direntry}}()
-const XATTR = Dict{FuseIno, Vector{Tuple{String,Vector{UInt8}}}}()
-
-function example(parent, name, data=nothing)
-    file = do_create(parent, name, S_IFREG | X_UGO, 0, 0)
+function example(fs::FilesystemData, parent::Integer, name::String, data=nothing)
+    inode = do_create(fs, FuseIno(parent), name, S_IFREG | X_UGO, 0, 0)
     if data !== nothing
         d =  convert(Vector{UInt8}, data)
-        file.size = length(d)
-        push!(DATA, file.ino => d)
+        inode.size = length(d)
+        push_data!(fs, inode.ino => d)
     end
-end
-
-function destroy_ino!(ino::FuseIno)
-    delete!(INODES, ino)
-    delete!(DATA, ino)
-    delete!(DIR_DATA, ino)
-    delete!(XATTR, ino)
-    nothing
 end
 
 # implementation of callback functions
@@ -111,29 +136,22 @@ end
 
 export lookup
 function lookup(fs::Any, req::FuseReq, parent::FuseIno, name::String)
-    entry = do_lookup(req, parent, name)
+    entry = do_lookup(fs, req, parent, name)
     entry isa Number ? entry : fuse_reply_entry(req, entry)
 end
 
-function find_direntry(parent::Integer, name::AbstractString)
+function find_direntry(fs::FilesystemData, parent::Integer, name::AbstractString)
     parent = FuseIno(parent)
-    haskey(INODES, parent) || return UV_ENOENT
-    is_directory(INODES[parent]) || return UV_ENOTDIR
-    ino = lookup_ino(parent, name)
+    has_inode(fs, parent) || return UV_ENOENT
+    is_directory(fs.inodes[parent]) || return UV_ENOTDIR
+    ino = lookup_ino(fs, parent, name)
     ino == 0 ? UV_ENOENT : ino
 end
 
-function lookup_ino(parent::Integer, name::AbstractString)
-    haskey(DIR_DATA, parent) || return 0
-    direntries = DIR_DATA[parent]
-    k = findfirst(de -> de.name == name, direntries)
-    k === nothing ? 0 : direntries[k].ino
-end
-
-function do_lookup(req::FuseReq, parent::FuseIno, name::String)
-    ino = find_direntry(parent, name)
+function do_lookup(fs::FilesystemData, req::FuseReq, parent::FuseIno, name::String)
+    ino = find_direntry(fs, parent, name)
     ino <= 0 && return ino
-    sta = status(ino)
+    sta = status(fs, ino)
     entry = CStructGuarded(FuseEntryParam, (ino=ino, attr=sta))
     entry.attr_timeout = 0.0
     entry.entry_timeout = 1e19
@@ -147,17 +165,16 @@ end
 
 export getattr
 function getattr(fs::Any, req::FuseReq, ino::FuseIno, ::CStruct{FuseFileInfo})
-    haskey(INODES, ino) || return UV_ENOENT
-    en = INODES[ino]
-    attr = status(en)
+    has_inode(fs, ino) || return UV_ENOENT
+    attr = status(fs, ino)
     attr_timeout = 10.0
     fuse_reply_attr(req, attr, attr_timeout)
 end
 
 export setattr
 function setattr(fs::Any, req::FuseReq, ino::FuseIno, st::CStruct{Cstat}, to_set::Integer, fi::CStruct{FuseFileInfo})
-    haskey(INODES, ino) || return UV_ENOENT
-    inode = INODES[ino]
+    has_inode(fs, ino) || return UV_ENOENT
+    inode = get_inode(fs, ino)::Inode
     resetsuid = false
     if to_set & FUSE_SET_ATTR_MODE != 0
         inode.mode = st.mode
@@ -210,11 +227,11 @@ end
 export readdir
 function readdir(fs::Any, req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
     buf = Vector{UInt8}(undef, size)
-    dir = INODES[ino]
+    dir = get_inode(fs, ino)::Inode
     is_directory(dir) || return UV_ENOTDIR
     i = off + 1
     p = 1
-    des = get_direntries(ino)
+    des = get_direntries(fs, ino)
     n = length(des)
     rem = size
     while i <= n + 2
@@ -223,7 +240,7 @@ function readdir(fs::Any, req::FuseReq, ino::FuseIno, size::Integer, off::Intege
             name = i == 1 ? DIR1 : DIR2
         else
             de = des[i-2]
-            st = status(de.ino)
+            st = status(fs, de.ino)
             name = de.name
         end
         entsize = fuse_add_direntry(req, view(buf, p:size), name, st, i)
@@ -240,14 +257,14 @@ function readdir(fs::Any, req::FuseReq, ino::FuseIno, size::Integer, off::Intege
     fuse_reply_buf(req, buf, size - rem)
 end
 
-function do_create(parent::Integer, name::String, mode::Integer, uid::Integer, gid::Integer)
-    dir = INODES[parent]
+function do_create(fs::FilesystemData, parent::FuseIno, name::String, mode::Integer, uid::Integer, gid::Integer)
+    dir = get_inode(fs, parent)::Inode
     is_directory(dir) || return UV_ENOTDIR
-    lookup_ino(parent, name) == 0 || return UV_EEXIST
-    ino = maximum(keys(INODES)) + 1
+    lookup_ino(fs, parent, name) == 0 || return UV_EEXIST
+    ino = next_ino(fs)
     inode = Inode(ino, mode, 1, 0, uid, gid)
-    push!(INODES, ino => inode)
-    direntries = get_direntries!(parent)
+    push_inode!(fs, ino => inode)
+    direntries = get_direntries!(fs, parent)
     push!(direntries, Direntry(ino, name))
     touchdir(dir, direntries, T_MTIME | T_CTIME)
     inode
@@ -260,27 +277,27 @@ function create(fs::Any, req::FuseReq, parent::FuseIno, name::String, mode::Fuse
     gid = ctx.gid
     umask = ctx.umask
     mode = mode & ~umask | mode & ~X_UGO
-    do_create(parent, name, mode, uid, gid)
-    entry = do_lookup(req, parent, name)
+    do_create(fs, parent, name, mode, uid, gid)
+    entry = do_lookup(fs, req, parent, name)
     fuse_reply_create(req, entry, fi)
 end
 
 export open
 function open(fs::Any, req::FuseReq, ino::FuseIno, fi::CStruct{FuseFileInfo})
-    inode = INODES[ino]
+    inode = get_inode(fs, ino)::Inode
     if is_regular(inode) && fi.flags & JL_O_TRUNC != 0
         inode.size = 0
-        delete!(DATA, ino)
+        delete_data!(fs, ino)
     end
     fuse_reply_open(req, fi)
 end
 
 export read
 function read(fs::Any, req::FuseReq, ino::FuseIno, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
-    haskey(INODES, ino) || return UV_ENOENT
-    inode = INODES[ino]
+    has_inode(fs, ino) || return UV_ENOENT
+    inode = get_inode(fs, ino)::Inode
     is_directory(inode) && return UV_ENOENT
-    data = get(DATA, ino) do; UInt8[] end
+    data = get_data(fs, ino)
     sz = max(min(length(data) - off, size), 0)
     bufv = CStructGuarded{FuseBufvec}(Cserialize(FuseBufvec, (count=1, buf=[(size=sz, mem = data)])))
     if sz > 0
@@ -291,9 +308,9 @@ end
 
 export write
 function write(fs::Any, req::FuseReq, ino::FuseIno, cvec::CVector{UInt8}, size::Integer, off::Integer, ::CStruct{FuseFileInfo})
-    inode = INODES[ino]
+    inode = get_inode(fs, ino)::Inode
     is_directory(inode) && return UV_ENOENT
-    data = get!(DATA, ino, UInt8[])
+    data = get_data!(fs, ino)
     total = off + size
     if total > length(data)
         resize!(data, total)
@@ -314,31 +331,31 @@ end
 
 export link
 function link(fs::Any, req::FuseReq, ino::FuseIno, newparent::FuseIno, name::String)
-    inode = INODES[ino]
+    inode = get_inode(fs, ino)::Inode
     is_directory(inode) && return UV_EPERM
-    dir = INODES[newparent]
+    dir = get_inode(fs, newparent)::Inode
     is_directory(dir) || return UV_ENOTDIR
-    lookup_ino(newparent, name) == 0 || return UV_EEXIST
-    direntries = get_direntries!(newparent)
+    lookup_ino(fs, newparent, name) == 0 || return UV_EEXIST
+    direntries = get_direntries!(fs, newparent)
     push!(direntries, Direntry(ino, name))
     touchdir(dir, direntries, T_MTIME | T_CTIME)
     inode.nlink += 1
-    entry = do_lookup(req, newparent, name)
+    entry = do_lookup(fs, req, newparent, name)
     fuse_reply_entry(req, entry)
 end
 
 export unlink
 function unlink(fs::Any, req::FuseReq, parent::FuseIno, name::String)
-    ino = find_direntry(parent, name)
+    ino = find_direntry(fs, parent, name)
     ino <= 0 && return ino
-    direntries = get_direntries(parent)
+    direntries = get_direntries(fs, parent)
     deleteat!(direntries, findall(de -> de.name == name, direntries))
-    dir = INODES[parent]
+    dir = get_inode(fs, parent)::Inode
     touchdir(dir, direntries, T_MTIME | T_CTIME)
-    inode = INODES[ino]
+    inode = get_inode(fs, ino)::Inode
     inode.nlink -= 1
     if inode.nlink <= 0
-        destroy_ino!(ino)
+        destroy_ino!(fs, ino)
     else
         touch(inode, T_CTIME)
     end
@@ -351,15 +368,15 @@ function rename(fs::Any, req::FuseReq, parent::FuseIno, name::String, newparent:
     if parent == newparent && name == newname
         return fuse_reply_err(req, 0)
     end
-    dir = INODES[parent]
-    dirnew = parent == newparent ? dir : INODES[newparent]
-    ino = lookup_ino(parent, name)
+    dir = get_inode(fs, parent)::Inode
+    dirnew = parent == newparent ? dir : get_inode(fs, newparent)::Inode
+    ino = lookup_ino(fs, parent, name)
     ino == 0 && return UV_ENOENT
-    newino = lookup_ino(newparent, newname)
+    newino = lookup_ino(fs, newparent, newname)
     newino == 0 && flags == RENAME_EXCHANGE && return UV_ENOENT
     newino != 0 && flags == RENAME_NOREPLACE && return UV_EEXIST
-    des = get_direntries(parent)
-    desnew = parent == newparent ? des : get_direntries!(newparent)
+    des = get_direntries(fs, parent)
+    desnew = parent == newparent ? des : get_direntries!(fs, newparent)
     k = findfirst(de -> de.name == name, des)::Integer
     de = des[k]
     knew = newino == 0 ? 0 : findfirst(de -> de.name == newname, desnew)::Integer
@@ -394,20 +411,20 @@ function mkdir(fs::Any, req::FuseReq, parent::FuseIno, name::String, mode::FuseM
     gid = ctx.gid
     umask = ctx.umask
     mode = mode & X_UGO & ~umask | mode & (S_ISUID | S_ISGID | S_ISVTX) | S_IFDIR
-    do_create(parent, name, mode, uid, gid)
-    entry = do_lookup(req, parent, name)
+    do_create(fs, parent, name, mode, uid, gid)
+    entry = do_lookup(fs, req, parent, name)
     fuse_reply_entry(req, entry)
 end
 
 export rmdir
 function rmdir(fs::Any, req::FuseReq, parent::FuseIno, name::String)
-    ino = find_direntry(parent, name)
+    ino = find_direntry(fs, parent, name)
     ino <= 0 && return ino
-    !isempty(get_direntries(ino)) && return UV_ENOTEMPTY
+    !isempty(get_direntries(fs, ino)) && return UV_ENOTEMPTY
 
-    direntries = get_direntries(parent)
+    direntries = get_direntries(fs, parent)
     deleteat!(direntries, findall(de -> de.name == name, direntries))
-    dir = INODES[parent]
+    dir = get_inode(fs, parent)::Inode
     touchdir(dir, direntries, T_MTIME | T_CTIME)
     return fuse_reply_err(req, 0)
 end
@@ -421,38 +438,38 @@ function symlink(fs::Any, req::FuseReq, link::String, parent::FuseIno, name::Str
     uid = ctx.uid
     gid = ctx.gid
     mode = X_UGO | S_IFLNK
-    inode = do_create(parent, name, mode, uid, gid)
+    inode = do_create(fs, parent, name, mode, uid, gid)
     inode.size = n
     vlink = collect(codeunits(link))
-    DATA[inode.ino] = push!(vlink, 0x00)
-    entry = do_lookup(req, parent, name)
+    set_data!(fs, inode.ino, push!(vlink, 0x00))
+    entry = do_lookup(fs, req, parent, name)
     fuse_reply_entry(req, entry)
 end
 
 export readlink
 function readlink(fs::Any, req::FuseReq, ino::FuseIno)
-    link = DATA[ino]
+    link = get_data(fs, ino)
     fuse_reply_readlink(req, link)
 end
 
-#export setxattr
+export setxattr
 function setxattr(fs::Any, req::FuseReq, ino::FuseIno, name::String, value::Vector{UInt8}, flags::Integer)
-    vec = get(XATTR, ino) do; emptyxvec() end
+    vec = get_xattr(fs, ino)
     k = findfirst(x->x[1] == name, vec)
     hk = k === nothing
     flags == XATTR_CREATE && hk && return UV_EEXIST
     flags == XATTR_REPLACE && !hk && return UV_ENODATA
     if k === nothing
-        XATTR[ino] = push!(vec, (name, value))
+        set_xattr!(fs, ino, push!(vec, (name, value)))
     else
         vec[k] = (name, value)
     end
     fuse_reply_err(req, 0)
 end
 
-#export getxattr
+export getxattr
 function getxattr(fs::Any, req::FuseReq, ino::FuseIno, name::String, size::Integer)
-    vec = get(XATTR, ino) do; emptyxvec() end
+    vec = get_xattr(fs, ino)
     k = findfirst(x->x[1] == name, vec)
     k === nothing && return UV_ENODATA
     val = vec[k][2]
@@ -466,9 +483,9 @@ function getxattr(fs::Any, req::FuseReq, ino::FuseIno, name::String, size::Integ
     end
 end
 
-#export removexattr
+export removexattr
 function removexattr(fs::Any, req::FuseReq, ino::FuseIno, name::String)
-    vec = get(XATTR, ino) do; emptyxvec() end
+    vec = get_xattr(fs, ino)
     k = findfirst(x->x[1] == name, vec)
     if k !== nothing
         deleteat!(vec, k)
@@ -476,9 +493,9 @@ function removexattr(fs::Any, req::FuseReq, ino::FuseIno, name::String)
     fuse_reply_err(req, 0)
 end
 
-#export listxattr
+export listxattr
 function listxattr(fs::Any, req::FuseReq, ino::FuseIno, size::Integer)
-    str = join([t[1] for t in get(XATTR, ino) do; emptyxvec() end], '\0')
+    str = join([t[1] for t in get_xattr(fs, ino)], '\0')
     val = collect(codeunits(str))
     !isempty(val) && push!(val, 0x0)
     println("listxattr($ino, $size); val = $val")
@@ -493,8 +510,6 @@ end
 
 
 # utility functions
-get_direntries(ino::Integer) = get(DIR_DATA, ino) do; Direntry[] end
-get_direntries!(ino::Integer) = get!(DIR_DATA, ino) do; Direntry[] end
 
 function touchdir(dir::Inode, direntries, mode)
     dir.size = length(direntries)
@@ -516,19 +531,15 @@ function Base.touch(inode::Inode, mode::UInt16)
     t
 end
 
-example(1, "xxx", codeunits("hello world 4711!\n"))
 
 args = ["mountpoint", "-s", "-d", "-h", "-V", "-f" , "-o", "clone_fd", "-o", "max_idle_threads=5"]
 
+const FS = FilesystemData(Inode(FUSE_INO_ROOT, S_IFDIR | X_UGO, 1, 0, 0, 0))
+example(FS, 1, "xxx", codeunits("hello world 4711!\n"))
+
 using Base.Threads
 
-bg() = @spawn main_loop($args, @__MODULE__, "hallo bg user data")
-
-mutable struct C
-    a::Int
-    b::Ref{Any}
-end    
-
-fg() = main_loop(args, @__MODULE__, nothing)
+bg() = @spawn main_loop($args, @__MODULE__, FS) 
+fg() = main_loop(args, @__MODULE__, FS)
 
 end # module ExampleFs

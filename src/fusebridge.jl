@@ -8,7 +8,7 @@ export fuse_add_direntry, fuse_add_direntry_plus, fuse_req_ctx
 
 export fuse_req_ctx, fuse_req_getgroups, fuse_req_interrupt_func, fuse_req_interrupted, fuse_req_userdata
 
-# F_INIT = 1
+# F_INIT = 1 (26)
 function Ginit(init::Function, fs::Any)
     Cinit = let init = init, fs = fs
         function (::Ptr{Nothing}, conn::Ptr{FuseConnInfo})
@@ -28,7 +28,7 @@ function Gdestroy(destroy::Function, fs::Any)
     end
     (@cfunction $Cdestroy Cvoid (Ptr{Nothing},))
 end
-# F_LOOKUP = 3
+# F_LOOKUP = 3 (1)
 function Glookup(lookup::Function, fs::Any)
     function Clookup(req::FuseReq, parent::FuseIno, name::Cstring)
         docall(req) do
@@ -204,7 +204,7 @@ function Gfsync(fsync::Function, fs::Any)
     end
     (@cfunction $Cfsync Cvoid (FuseReq, FuseIno, Cint, Ptr{FuseFileInfo}))
 end
-# F_OPENDIR = 21
+# F_OPENDIR = 21 (37)
 function Gopendir(opendir::Function, fs::Any)
     function Copendir(req::FuseReq, ino::FuseIno, fi::Ptr{FuseFileInfo})
         docall(req) do
@@ -291,7 +291,7 @@ function Gremovexattr(removexattr::Function, fs::Any)
     end
     (@cfunction $Cremovexattr Cvoid (FuseReq, FuseIno, Cstring))
 end
-# F_ACCESS = 30
+# F_ACCESS = 30 (34)
 function Gaccess(access::Function, fs::Any)
     function Caccess(req::FuseReq, ino::FuseIno, mask::Cint)
         docall(req) do
@@ -524,9 +524,9 @@ end
 
 # session functions
 
-function fuse_session_new(fargs::CStructAccess{FuseCmdlineArgs}, callbacks::Vector{CFu})
-    ccall((:fuse_session_new, :libfuse3), Ptr{Nothing},
-        (Ptr{FuseCmdlineArgs}, Ptr{CFu}, Cint, Ptr{Nothing}),
+function fuse_session_new(fargs::CStructAccess{FuseCmdlineArgs}, callbacks::FuseLowlevelOps)
+    ccall((:fuse_session_new, :libfuse3), Ptr{Cvoid},
+        (Ptr{FuseCmdlineArgs}, Ref{FuseLowlevelOps}, Cint, Ref{Nothing}),
         fargs, callbacks, sizeof(callbacks), C_NULL)
 end
 
