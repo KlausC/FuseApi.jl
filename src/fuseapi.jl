@@ -81,7 +81,6 @@ An error reply is returned.
 function docall(f::Function, req::FuseReq)
     error = Base.UV_ENOTSUP
     try
-        println("docall($f, $req)")
         if req.pointer === C_NULL
             ccall(:jl_breakpoint, Cvoid, (Any,), f)
             throw(ArgumentError("docall($f, $req) - req was zero!!!"))

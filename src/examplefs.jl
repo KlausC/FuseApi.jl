@@ -125,13 +125,13 @@ end
 
 export init
 function init(userdata::Any, conn::CStruct{FuseConnInfo})
-    println("init userdata = '$userdata'")
-    println("init conninfo = $conn")
+    #println("init userdata = '$userdata'")
+    #println("init conninfo = $conn")
 end
 
 export destroy
 function destroy(userdata::Any)
-    println("destroy userdata = '$userdata'")
+    #println("destroy userdata = '$userdata'")
 end
 
 export lookup
@@ -473,7 +473,7 @@ function getxattr(fs::Any, req::FuseReq, ino::FuseIno, name::String, size::Integ
     k = findfirst(x->x[1] == name, vec)
     k === nothing && return UV_ENODATA
     val = vec[k][2]
-    println("getxattr($name) = $val")
+    #println("getxattr($name) = $val")
     bsize = sizeof(val)
     if size == 0
         fuse_reply_xattr(req, bsize)
@@ -498,7 +498,7 @@ function listxattr(fs::Any, req::FuseReq, ino::FuseIno, size::Integer)
     str = join([t[1] for t in get_xattr(fs, ino)], '\0')
     val = collect(codeunits(str))
     !isempty(val) && push!(val, 0x0)
-    println("listxattr($ino, $size); val = $val")
+    #println("listxattr($ino, $size); val = $val")
     bsize = sizeof(val)
     if size == 0
         fuse_reply_xattr(req, bsize)
