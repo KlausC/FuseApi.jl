@@ -143,7 +143,6 @@ end
 function Glink(link::Function, fs::Any)
     function Clink(req::FuseReq, ino::FuseIno, newparent::FuseIno, newname::Cstring)
         docall(req) do
-            println("link($ino, $newparent, $newname)")
             newname = unsafe_string(newname)
             link(fs, req, ino, newparent, newname)
         end
@@ -264,7 +263,6 @@ end
 function Ggetxattr(getxattr::Function, fs::Any)
     function Cgetxattr(req::FuseReq, ino::FuseIno, name::Cstring, size::Csize_t)
         docall(req) do
-            println("getxattr($ino, $name)")
             name = unsafe_string(name)
             getxattr(fs, req, ino, name, size)
         end
@@ -284,7 +282,6 @@ end
 function Gremovexattr(removexattr::Function, fs::Any)
     function Cremovexattr(req::FuseReq, ino::FuseIno, name::Cstring)
         docall(req) do
-            println("removexattr($ino, $name)")
             name = unsafe_string(name)
             removexattr(fs, req, ino, name)
         end

@@ -45,9 +45,10 @@ mutable struct Inode
     atime::Timespec
     mtime::Timespec
     ctime::Timespec
+    lookup::UInt64
     function Inode(ino, mode, nlink, size, uid, gid)
         t = timespec_now()
-        new(ino, mode, nlink, size, uid, gid, t, t, t)
+        new(ino, mode, nlink, size, uid, gid, t, t, t, 0)
     end
 end
 
@@ -62,6 +63,7 @@ struct FilesystemData
     FilesystemData(root) = new(Dict(FUSE_INO_ROOT => root), Dict(), Dict(), Dict())
 end
 
+reset_inodes(fs::FilesystemData) = for inode in values(fs.inodes); inode.lookup = 0; end 
 get_inode(fs::FilesystemData, ino::FuseIno) = get(fs.inodes, ino, nothing)
 has_inode(fs::FilesystemData, ino::FuseIno) = haskey(fs.inodes, ino)
 next_ino(fs::FilesystemData) = maximum(keys(fs.inodes)) + 1
@@ -69,10 +71,10 @@ push_inode!(fs::FilesystemData, inode::Pair{FuseIno,Inode}) = push!(fs.inodes, i
 
 get_data(fs::FilesystemData, ino::FuseIno) = get(fs.data, ino) do; UInt8[] end
 get_data!(fs::FilesystemData, ino::FuseIno) = get!(fs.data, ino) do; UInt8[] end
-set_data!(fs::FilesystemData, ino::FuseIno, v) = setindex!(fs.data, ino, v)
+set_data!(fs::FilesystemData, ino::FuseIno, v) = setindex!(fs.data, v, ino)
 has_data(fs::FilesystemData, ino::FuseIno) = haskey(fs.data, ino)
 push_data!(fs::FilesystemData, inode::Pair{FuseIno}) = push!(fs.data, inode)
-delete_data!(fs::FilesystemData, inode::Pair{FuseIno}) = delete!(fs.data, inode)
+delete_data!(fs::FilesystemData, inode::FuseIno) = delete!(fs.data, inode)
 
 function lookup_ino(fs::FilesystemData, parent::Integer, name::AbstractString)
     haskey(fs.data_dir, parent) || return 0
@@ -94,23 +96,8 @@ function destroy_ino!(fs::FilesystemData, ino::FuseIno)
     nothing
 end
 
-
-function status(inode::Inode)
-    st = CStructGuarded(Cstat)
-    st.ino = inode.ino
-    st.mode = inode.mode
-    st.nlink = inode.nlink
-    st.uid = inode.uid
-    st.gid = inode.gid
-    st.size = inode.size
-    st.atime = inode.atime
-    st.mtime = inode.mtime
-    st.ctime = inode.ctime
-    st
-end
-function status(fs::FilesystemData, ino::FuseIno)
-    status(get_inode(fs, ino))
-end
+status(inode::Inode) = CStructGuarded{Cstat}(Cserialize(Cstat, inode))
+status(fs::FilesystemData, ino::FuseIno) = status(get_inode(fs, ino))
 
 function example(fs::FilesystemData, parent::Integer, name::String, data=nothing)
     inode = do_create(fs, FuseIno(parent), name, S_IFREG | X_UGO, 0, 0)
@@ -124,20 +111,24 @@ end
 # implementation of callback functions
 
 export init
-function init(userdata::Any, conn::CStruct{FuseConnInfo})
-    #println("init userdata = '$userdata'")
+function init(fs::FilesystemData, conn::CStruct{FuseConnInfo})
+    #println("init userdata = '$fs'")
     #println("init conninfo = $conn")
+    reset_inodes(fs)
 end
 
 export destroy
-function destroy(userdata::Any)
-    #println("destroy userdata = '$userdata'")
+function destroy(fs::FilesystemData)
+    #println("destroy userdata = '$fs'")
 end
 
 export lookup
-function lookup(fs::Any, req::FuseReq, parent::FuseIno, name::String)
+function lookup(fs::FilesystemData, req::FuseReq, parent::FuseIno, name::String)
     entry = do_lookup(fs, req, parent, name)
-    entry isa Number ? entry : fuse_reply_entry(req, entry)
+    entry isa Number && return entry
+    inode = get_inode(fs, entry.ino)
+    inode.lookup += 1
+    fuse_reply_entry(req, entry)
 end
 
 function find_direntry(fs::FilesystemData, parent::Integer, name::AbstractString)
@@ -160,6 +151,14 @@ end
 
 export forget
 function forget(fs::Any, req::FuseReq, ino::FuseIno, count::Integer)
+    println("forget($ino, $count)")
+    inode = get_inode(fs, ino)::Inode
+    nl = inode.lookup
+    nl = nl >= count ? nl - count : 0
+    inode.lookup = nl
+    if nl <= 0
+        destroy_ino!(fs, ino)
+    end
     fuse_reply_none(req)
 end
 
@@ -229,11 +228,11 @@ function readdir(fs::Any, req::FuseReq, ino::FuseIno, size::Integer, off::Intege
     buf = Vector{UInt8}(undef, size)
     dir = get_inode(fs, ino)::Inode
     is_directory(dir) || return UV_ENOTDIR
-    i = off + 1
     p = 1
     des = get_direntries(fs, ino)
     n = length(des)
     rem = size
+    i = off + 1
     while i <= n + 2
         if i <= 2
             st = status(dir)
@@ -279,6 +278,8 @@ function create(fs::Any, req::FuseReq, parent::FuseIno, name::String, mode::Fuse
     mode = mode & ~umask | mode & ~X_UGO
     do_create(fs, parent, name, mode, uid, gid)
     entry = do_lookup(fs, req, parent, name)
+    inode = get_inode(fs, entry.ino)
+    inode.lookup += 1
     fuse_reply_create(req, entry, fi)
 end
 
@@ -339,8 +340,9 @@ function link(fs::Any, req::FuseReq, ino::FuseIno, newparent::FuseIno, name::Str
     direntries = get_direntries!(fs, newparent)
     push!(direntries, Direntry(ino, name))
     touchdir(dir, direntries, T_MTIME | T_CTIME)
-    inode.nlink += 1
     entry = do_lookup(fs, req, newparent, name)
+    inode.nlink += 1
+    inode.lookup += 1
     fuse_reply_entry(req, entry)
 end
 
@@ -353,12 +355,7 @@ function unlink(fs::Any, req::FuseReq, parent::FuseIno, name::String)
     dir = get_inode(fs, parent)::Inode
     touchdir(dir, direntries, T_MTIME | T_CTIME)
     inode = get_inode(fs, ino)::Inode
-    inode.nlink -= 1
-    if inode.nlink <= 0
-        destroy_ino!(fs, ino)
-    else
-        touch(inode, T_CTIME)
-    end
+    touch(inode, T_CTIME)
     return fuse_reply_err(req, 0)
 end
 
@@ -411,8 +408,9 @@ function mkdir(fs::Any, req::FuseReq, parent::FuseIno, name::String, mode::FuseM
     gid = ctx.gid
     umask = ctx.umask
     mode = mode & X_UGO & ~umask | mode & (S_ISUID | S_ISGID | S_ISVTX) | S_IFDIR
-    do_create(fs, parent, name, mode, uid, gid)
+    inode = do_create(fs, parent, name, mode, uid, gid)
     entry = do_lookup(fs, req, parent, name)
+    inode.lookup += 1
     fuse_reply_entry(req, entry)
 end
 
@@ -421,7 +419,6 @@ function rmdir(fs::Any, req::FuseReq, parent::FuseIno, name::String)
     ino = find_direntry(fs, parent, name)
     ino <= 0 && return ino
     !isempty(get_direntries(fs, ino)) && return UV_ENOTEMPTY
-
     direntries = get_direntries(fs, parent)
     deleteat!(direntries, findall(de -> de.name == name, direntries))
     dir = get_inode(fs, parent)::Inode
@@ -443,6 +440,7 @@ function symlink(fs::Any, req::FuseReq, link::String, parent::FuseIno, name::Str
     vlink = collect(codeunits(link))
     set_data!(fs, inode.ino, push!(vlink, 0x00))
     entry = do_lookup(fs, req, parent, name)
+    inode.lookup += 1
     fuse_reply_entry(req, entry)
 end
 

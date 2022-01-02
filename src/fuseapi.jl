@@ -134,6 +134,8 @@ of which are specified in `FuseLowlevelOps`.
 function main_loop(args::AbstractVector{String}, mod::Module, user_data=nothing)
     user_data_r = Ref(user_data)
     cbhandles = CFunction[]
+    # it is essential, that user_data and cbhandles are protected from GC
+    # during the active time of _main_loop.
     GC.@preserve user_data_r cbhandles _main_loop(args, mod, user_data, cbhandles)
 end
 function _main_loop(args, mod, user_data, cbhandles)

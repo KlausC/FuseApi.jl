@@ -134,7 +134,8 @@ struct FuseLowlevelOps
     copy_file_range::CFu
     lseek::CFu
 end
-const F_SIZE = sizeof(FuseLowlevelOps) ÷ sizeof(Ptr)
+const F_SIZE = sizeof(FuseLowlevelOps) ÷ sizeof(CFu
+)
 
 const FuseIno = UInt64
 const FuseMode = UInt32
