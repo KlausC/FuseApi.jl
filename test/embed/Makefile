@@ -12,9 +12,9 @@ libmtcb.so: libmtcb.o
 	gcc $(CFLAGS) -shared -o libmtcb.so libmtcb.o
 
 clean:
-	rm *.o *.so TTY
+	rm -f *.o *.so TTY
 
-run:
+run: libmtcb.so callmtcb.jl
 	$(JULIA) --startup-file=no callmtcb.jl
 
 debug: libmtcb.so callmtcb.jl mtcb.debug TTY

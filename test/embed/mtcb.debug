@@ -4,3 +4,4 @@ break cb_thread
 break __tls_get_addr
 disable $bpnum
 break ijl_get_pgcstack
+disable $bpnum
