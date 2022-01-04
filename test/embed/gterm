@@ -1,0 +1,6 @@
+#! /usr/bin/sh
+
+SIGNATURE="sleep $$s 1d"
+gnome-terminal -- $SIGNATURE
+ps -fC sleep | awk "/$SIGNATURE/"'{print "/dev/"$6}'
+

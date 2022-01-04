@@ -1,0 +1,6 @@
+set breakpoint pending on
+break cb_setup
+break cb_thread
+break __tls_get_addr
+disable $bpnum
+break ijl_get_pgcstack
